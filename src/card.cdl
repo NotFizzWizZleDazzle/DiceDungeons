@@ -1,0 +1,229 @@
+import "drift" { * };
+import "game_state.cdl" { * };
+import "player.cdl" { * };
+import "enemy.cdl" { * };
+
+@settings(section: "card")
+struct CardSettings {
+    scale: float = 4.0,
+    spacing: float = 460.0,
+    hand: int = 3,
+    drop_chance: float = 0.08,
+    card_at: int[] = [3, 5, 10],
+    then_every: int = 10,
+    pickup_radius: float = 150.0,
+    pickup_life: float = 20.0,
+    rare_chance: float = 0.02,
+    rare_after: int = 3,
+    rare: string[] = ["health", "speed"],
+}
+
+@resource
+struct CardAsset {
+    bg: Texture = texture("assets/cards/cardBG.png"),
+    middle: Texture = texture("assets/cards/cardTempMiddle.png"),
+    names: string[] = ["speed", "chainbolt", "iceknife", "health", "gascloud", "fireball", "maxhealth", "maxmana"],
+    abilities: Texture[] = [
+        texture("assets/cards/speedCard.png"),
+        texture("assets/cards/chainboltCard.png"),
+        texture("assets/cards/iceknifeCard.png"),
+        texture("assets/cards/healthCard.png"),
+        texture("assets/cards/gascloudCard.png"),
+        texture("assets/cards/fireballCard.png"),
+        texture("assets/cards/healthCard.png"),
+        texture("assets/cards/maxManaCard.png"),
+    ],
+}
+
+@resource
+struct Abilities {
+    owned: string[] = [],
+}
+
+@resource
+struct UpgradeProgress {
+    rolls: int = 0,
+}
+
+@component
+struct CardDrop {
+    base_y: float = 0.0,
+    age: float = 0.0,
+    part: Entity = Entity { .. },
+}
+
+@component
+struct Card {
+    ability: int = 0,
+}
+
+@component
+struct CardPart {}
+
+fn spawn_card(cmd: Commands, art: CardAsset, ability: int, pos: Vec2, scale: float) -> Entity {
+    let card = cmd.spawn([
+        Transform { position: pos, scale: vec2(scale, scale), .. },
+        Sprite { image: art.middle, z: 1.0, layer: hud_layer(), .. },
+        Card { ability: ability },
+    ]);
+    let card = cmd.spawn([
+        Transform { position: pos, scale: vec2(scale, scale), .. },
+        Sprite { image: art.bg.to_image().crop(Rect { x: 24, y: 2, w: 55, h: 92 }).to_texture(), z: 0.5, layer: hud_layer(), .. },
+        Card { ability: ability },
+    ]);
+    cmd.spawn([
+        Transform { position: pos, scale: vec2(scale, scale), .. },
+        Sprite { image: art.abilities[ability], z: 2.0, layer: hud_layer(), .. },
+        CardPart {},
+    ]);
+    return card;
+}
+
+@system(on_exit: GameState::MainMenu)
+fn reset_upgrades(sets: CardSettings, progress: UpgradeProgress, owned: Abilities, kills: Kills) {
+    kills.count = 0;
+    kills.deaths = [];
+    progress.rolls = 0;
+    owned.owned = [];
+}
+
+fn card_due(sets: CardSettings, kill: int) -> bool {
+    let killC = [3, 5+3, 7+5, 9+7, 11+9, 13+11];
+    if sets.card_at.contains(kill) {
+        return true;
+    }
+    let last = 0;
+    for k in sets.card_at {
+        if k > last {
+            last = k;
+        }
+    }
+    // return true;
+    return killC.contains(kill);
+}
+
+@system(in_state: [GameState::Playing])
+fn card_drops(kills: Kills, sets: CardSettings, progress: UpgradeProgress, art: CardAsset, random: Random, cmd: Commands, time: Time) {
+    for pos in kills.deaths {
+        progress.rolls += 1;
+        let r = rng(progress.rolls * 7919);
+        let due = card_due(sets, progress.rolls);
+        if due || r.chance(sets.drop_chance) {
+            let front = cmd.spawn([
+                Transform { position: pos, .. },
+            ]);
+            cmd.spawn([
+                Transform { position: pos, scale: vec2(1.2, 1.2), .. },
+                Sprite { image: art.middle, z: 120.0, .. },
+                CardDrop { base_y: pos.y, part: front, .. },
+                ParticleEmitter {
+                    rate: 25.0, lifetime_min: 0.5, lifetime_max: 1.2,
+                    speed_min: 10.0, speed_max: 45.0, angle_min: -2.6, angle_max: -0.54,
+                    size_start: 5.0, size_end: 0.5,
+                    color_start: Color { r: 1.0, g: 0.9, b: 0.5, a: 1.0 },
+                    color_end: Color { r: 1.0, g: 0.6, b: 0.2, a: 0.0 },
+                    shape: EmitShape::Circle, shape_radius: 40.0,
+                    blend: Blend::Additive, max_particles: 60, z: 121.0, ..
+                },
+            ]);
+        }
+    }
+    kills.deaths = [];
+}
+
+@system(in_state: [GameState::Playing])
+fn card_pickups(drops: (Entity, CardDrop, Transform)[], player: (Player, Transform)[], sets: CardSettings, time: Time, state: State<GameState>, cmd: Commands) {
+    for (de, d, t) in drops {
+        d.age += time.dt;
+        t.position = vec2(t.position.x, d.base_y - 30.0 - 12.0 * sin(d.age * 3.0));
+        let taken = false;
+        for (_, pt) in player {
+            if t.position.distance(pt.position) <= sets.pickup_radius {
+                taken = true;
+            }
+        }
+        cmd.insert(d.part, Transform { position: t.position, scale: t.scale, .. });
+        if taken {
+            cmd.despawn(d.part);
+            cmd.despawn(de);
+            state.set(GameState::PickingUpgrade);
+        } else if d.age >= sets.pickup_life {
+            cmd.despawn(d.part);
+            cmd.despawn(de);
+        }
+    }
+}
+
+@system(on_exit: GameState::MainMenu)
+fn clear_card_drops(drops: (Entity, CardDrop)[], cmd: Commands) {
+    for (e, d) in drops {
+        cmd.despawn(d.part);
+        cmd.despawn(e);
+    }
+}
+
+@system(on_enter: GameState::PickingUpgrade)
+fn deal_cards(art: CardAsset, sets: CardSettings, owned: Abilities, window: Window, random: Random, cmd: Commands) {
+    let r = rng(random.stream("cards").range(1, 1000000000));
+    let common: int[] = [];
+    let rare: int[] = [];
+    for i in range(art.abilities.len()) {
+        if sets.rare.contains(art.names[i]) {
+            rare.push(i);
+        } else {
+            common.push(i);
+        }
+    }
+    let n = sets.hand;
+    if n > common.len() + rare.len() {
+        n = common.len() + rare.len();
+    }
+    let left = window.width * 0.5 - sets.spacing * float(n - 1) * 0.5;
+    for i in range(n) {
+        let rare_ok = owned.owned.len() >= sets.rare_after;
+        let use_rare = rare.len() > 0 && rare_ok && (common.len() == 0 || r.chance(sets.rare_chance));
+        let ability = 0;
+        if use_rare {
+            let j = r.range(0, rare.len() - 1);
+            ability = rare[j];
+            rare.remove(j);
+        } else {
+            let j = r.range(0, common.len() - 1);
+            ability = common[j];
+            common.remove(j);
+        }
+        spawn_card(cmd, art, ability, vec2(left + sets.spacing * float(i), window.height * 0.5), sets.scale);
+    }
+}
+
+@system(in_state: [GameState::PickingUpgrade])
+fn pick_card(cards: (Card, Sprite, Transform)[], art: CardAsset, owned: Abilities, input: Input, state: State<GameState>) {
+    let m = input.mouse_screen();
+    let size = art.middle.size();
+    for (c, sprite, t) in cards {
+        let hw = size.x * t.scale.x * 0.5;
+        let hh = size.y * t.scale.y * 0.5;
+        let over = m.x >= t.position.x - hw && m.x <= t.position.x + hw
+                && m.y >= t.position.y - hh && m.y <= t.position.y + hh;
+        if over {
+            sprite.color = Color { r: 1.0, g: 0.9, b: 0.55, a: 1.0 };
+            if input.mouse_pressed(MouseButton::Left) {
+                owned.owned.push(art.names[c.ability]);
+                log("picked " + art.names[c.ability]);
+                state.set(GameState::Playing);
+            }
+        } else {
+            sprite.color = Color { .. };
+        }
+    }
+}
+
+@system(on_exit: GameState::PickingUpgrade)
+fn clear_cards(cards: (Entity, Card)[], parts: (Entity, CardPart)[], cmd: Commands) {
+    for (e, _) in cards {
+        cmd.despawn(e);
+    }
+    for (e, _) in parts {
+        cmd.despawn(e);
+    }
+}

@@ -1,0 +1,128 @@
+import "drift" { * };
+import "std/math" as math;
+
+@settings(section: "torches")
+struct TorchSettings {
+    ambient: Color = Color { r: 0.13, g: 0.12, b: 0.16, a: 1.0 },
+    light_color: Color = Color { r: 1.0, g: 0.6, b: 0.28, a: 1.0 },
+    radius: float = 360.0,
+    intensity: float = 3.4,
+    falloff: float = 1.4,
+    flicker: float = 0.2,
+    flicker_speed: float = 1.0,
+    flame_color: Color = Color { r: 1.0, g: 0.72, b: 0.3, a: 1.0 },
+    flame_size: float = 7.0,
+    stick_color: Color = Color { r: 0.28, g: 0.18, b: 0.1, a: 1.0 },
+    embers: bool = true,
+    shadows: bool = false,
+    glow: bool = true,
+    glow_shader: string = "assets/shaders/torchglow",
+    vignette: float = 0.55,
+    vignette_radius: float = 0.85,
+    grain: float = 0.035,
+    shimmer: float = 1.0,
+    shimmer_height: float = 140.0,
+    tint: Color = Color { r: 1.0, g: 0.9, b: 0.75, a: 0.3 },
+    sprite: string = "assets/torch.png",
+}//comment test
+//yay
+//why is comment double forward slash
+
+@resource
+struct TorchAsset {
+    sprite: Texture = Texture { .. },
+}
+@resource
+struct TorchGlow { material: Material = Material { .. }, on: bool = false }
+
+@component
+struct Torch { phase: float = 0.0, radius: float = 360.0, intensity: float = 1.4 }
+
+@component
+struct TorchFlame { phase: float = 0.0, size: float = 7.0 }
+
+fn flicker(t: float, phase: float, speed: float) -> float {
+    let a = math::sin(t * 11.0 * speed + phase);
+    let b = math::sin(t * 23.0 * speed + phase * 1.7);
+    let c = math::sin(t * 5.3 * speed + phase * 0.6);
+    return (a * 0.45 + b * 0.25 + c * 0.3);
+}
+
+fn torch(cmd: Commands, pos: Vec2, s: TorchSettings, art: TorchAsset, seed: int) -> Entity {
+    let r = rng(seed);
+    let phase = r.range_float(0.0, TAU);
+    let t = cmd.spawn([
+        at(pos.x, pos.y),
+        Torch { phase: phase, radius: s.radius, intensity: s.intensity },
+        PointLight { color: s.light_color, intensity: s.intensity, radius: s.radius, falloff: s.falloff, shadows: s.shadows, .. },
+    ]);
+    cmd.spawn_child(t, [
+        Transform { position: vec2(0.0, -1.0), scale: vec2(2.5, 2.5), .. },
+        Sprite{
+            image: art.sprite,
+            ..
+        }
+    ]);
+    cmd.spawn_child(t, [
+        Transform { position: vec2(0.0, -1.0), scale: vec2(2.5, 2.5), .. },
+        TorchFlame { phase: phase, size: s.flame_size },
+    ]);
+    cmd.spawn_child(t, [
+        at(0.0, -2.0),
+        TorchFlame { phase: phase + 1.3, size: s.flame_size * 0.45 },
+    ]);
+    if s.embers {
+        cmd.spawn_child(t, [
+            at(0.0, -6.0),
+            ParticleEmitter {
+                rate: 10.0, lifetime_min: 0.8, lifetime_max: 2.2,
+                speed_min: 30.0, speed_max: 110.0, angle_min: -2.4, angle_max: -0.74,
+                size_start: 4.0, size_start_max: 7.0, size_end: 0.8, size_end_max: 1.6,
+                color_start: Color { r: 1.0, g: 0.75, b: 0.35, a: 1.0 },
+                color_end: Color { r: 0.9, g: 0.2, b: 0.05, a: 0.0 },
+                gravity: vec2(0.0, -40.0), drag: 0.8,
+                shape: EmitShape::Circle, shape_radius: 3.0,
+                spin_min: -3.0, spin_max: 3.0,
+                blend: Blend::Additive, max_particles: 400, z: 6.0, ..
+            },
+        ]);
+    }
+    return t;
+}
+
+@system(schedule: Schedule::Startup)
+fn torch_ambient(effects: Effects, assets: Assets, s: TorchSettings, glow: TorchGlow) {
+    effects.set_ambient(s.ambient);
+    if s.glow {
+        let m = assets.create_material(assets.shader(s.glow_shader));
+        m.set_param(0, s.vignette, s.vignette_radius, s.grain, s.shimmer);
+        m.set_color(1, s.tint);
+        effects.add_material(m, 50);
+        glow.material = m;
+        glow.on = true;
+    }
+}
+
+@system
+fn torch_glow(torches: (Torch, Transform)[], cameras: (Camera, Transform)[], glow: TorchGlow, window: Window, s: TorchSettings) {
+    if !glow.on {
+        return;
+    }
+    let origin = vec2(0.0, 0.0);
+    for (_, c) in cameras {
+        origin = c.position - vec2(window.width * 0.5, window.height * 0.5);
+    }
+    let i = 0;
+    for (_, t) in torches {
+        let p = t.position - origin;
+        let on_screen = p.x > -s.radius && p.x < window.width + s.radius && p.y > -s.radius && p.y < window.height + s.radius;
+        if i < 6 && on_screen {
+            glow.material.set_param(2 + i, p.x / window.width, p.y / window.height, s.shimmer_height / window.height, 1.0);
+            i += 1;
+        }
+    }
+    while i < 6 {
+        glow.material.set_param(2 + i, 0.0, 0.0, 0.0, 0.0);
+        i += 1;
+    }
+}

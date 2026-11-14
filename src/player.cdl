@@ -1,0 +1,171 @@
+import "drift" { * };
+import "game_state.cdl" { * };
+
+
+
+@component
+struct Player {
+    health: int = 3,
+    max_health: int = 3,
+    mana: int = 50,
+    max_mana: int = 50,
+    on_ground: bool = false,
+    invuln: float = 0.0,
+    shield: bool = false,
+    speed: float = 1.0,
+    stuck_time: float = 0.0,
+}
+
+
+@component 
+// TS for subsprites
+struct PlayerCollider { i: int }
+
+@resource
+struct PlayerAsset {
+    tops: Texture[] = [
+        texture("assets/topSprites/blueTop.png"),
+        texture("assets/topSprites/greenTop.png"),
+        texture("assets/topSprites/redTop.png"),
+    ],
+    center: Texture = texture("assets/topSprites/whiteCircle.png")
+}
+
+
+const PLAYER_BITS: int = 2;
+const PLAYER_MASK: int = 65535 - 2;
+
+const JUMP_SPIN: float = 180.0;
+
+const SIZE_MULT: float = 0.85;
+
+
+fn create_player(cmd: Commands, assets: PlayerAsset) -> Entity {
+    let pos = vec2(500.0, 250.0);
+
+
+    let player = cmd.spawn([
+        Player { health: assets.tops.len(), max_health: assets.tops.len(), .. },
+        RigidBody { .. },
+        Transform { position: pos, scale: vec2(0.5 * SIZE_MULT, 0.5 * SIZE_MULT), .. },
+        Velocity { .. },
+ 
+        CircleCollider { radius: 40.0 * SIZE_MULT, density: 10.0, category: PLAYER_BITS, mask: PLAYER_MASK, friction: 1, .. },
+    ]);
+    let reach = 64.0 * SIZE_MULT;
+    for i in range(3) {
+        let a = float(i) * TAU / 3.0;
+        let out = vec2(sin(a), 0.0 - cos(a));
+        cmd.spawn([
+            Sprite { image: assets.tops[i], z: 200.0, pivot: vec2(0.5, 0.5), .. },
+            Transform { position: pos + out * reach, scale: vec2(4.0 * SIZE_MULT, 4.0 * SIZE_MULT), rotation: a, .. },
+            RigidBody { .. },
+            Velocity { .. },
+            Joint { kind: JointKind::Weld, target: player, anchor: vec2(0.0, reach), target_anchor: vec2(0.0, 0.0), .. },
+            PlayerCollider { i: i },
+            BoxCollider { friction: 1.0, category: PLAYER_BITS, mask: PLAYER_MASK, half_size: vec2(17.0 * SIZE_MULT, 51.0 * SIZE_MULT), .. },
+        ]);
+    }
+
+    cmd.spawn_child(player, [
+        Transform { position: vec2(0.0, 0.0), scale: vec2(7.5 * SIZE_MULT, 7.5 * SIZE_MULT), .. },
+        Sprite { image: assets.center, z: 100.0, color: Color { r: 0, g: 0, b: 0, a: 1 }, .. },
+    ]);
+
+    return player;
+}
+
+@system(in_state: [GameState::Playing])
+fn movement(player: (Player, Velocity, Transform)[], parts: (PlayerCollider, Velocity, Entity, Transform)[], input: Input, physics: Physics, time: Time, cmd: Commands) {
+    for (d, v, t) in player {
+        let was_on_ground = d.on_ground;
+        let down = physics.raycast_mask(t.position + vec2(0.0, 64.0), vec2(0.0, 1.0), 90.0, 1);
+        d.on_ground = down.hit;
+
+
+
+        let dtheta = 0.0;
+        
+        if input.key_down(Key::A) {
+            dtheta -= 7.0 * d.speed;
+        }
+        if input.key_down(Key::D) {
+            dtheta += 7.0 * d.speed;
+        }
+        let y = v.linear.y;
+        if d.on_ground && input.key_pressed(Key::W) {
+            y = -1120.0;
+            
+        }
+        
+        let f = 0.0;
+        if (d.on_ground) {
+            if dtheta != 0.0 {
+                v.angular = dtheta;
+            }
+        }
+        else {
+            f = dtheta / 2;
+        }
+        v.linear = vec2(v.linear.x, y);
+        v.linear.x = max(-600, min(600, v.linear.x));
+
+        let spin = v.angular;
+        if spin < 0.0 {
+            spin = 0.0 - spin;
+        }
+        let slide = v.linear.x;
+        if slide < 0.0 {
+            slide = 0.0 - slide;
+        }
+        if dtheta != 0.0 && spin < 1.0 && slide < 30.0 {
+            d.stuck_time += time.dt;
+        } else {
+            d.stuck_time = 0.0;
+        }
+        if d.stuck_time > 0.35 {
+            d.stuck_time = 0.0;
+            let side = 1.0;
+            if dtheta < 0.0 {
+                side = -1.0;
+            }
+            v.linear = vec2(v.linear.x + side * 250.0, -650.0);
+            v.angular = dtheta;
+        }
+
+        for (_, pv, e, lt) in parts {
+            physics.apply_force(e, vec2(f * 5e6, 0.0));
+            // physics.apply_torque(e, t * 1e15);
+        }
+    }
+}
+
+@system(on_exit: GameState::MainMenu)
+fn start_run(old: (Entity, Player)[], old_parts: (Entity, PlayerCollider)[], cameras: (Entity, Camera)[], assets: PlayerAsset, cmd: Commands) {
+    for (e, _) in old {
+        cmd.despawn(e);
+    }
+    for (e, _) in old_parts {
+        cmd.despawn(e);
+    }
+    let player = create_player(cmd, assets);
+    for (cam, _) in cameras {
+        cmd.insert(cam, CameraFollow { target: player, smoothing: 20.0, .. });
+    }
+}
+
+@system(in_state: [GameState::Playing])
+fn player_iframes(player: (Entity, Player)[], parts: (PlayerCollider, Sprite, Entity)[], cmd: Commands, time: Time) {
+    let alpha = 1.0;
+    for (e, p) in player {
+        if p.invuln > 0.0 {
+            p.invuln -= time.dt;
+            if int(p.invuln * 12.0) % 2 == 0 {
+                alpha = 0.25;
+            }
+        }
+    }
+    for (_, sprite, _) in parts {
+        sprite.color = Color { r: sprite.color.r, g: sprite.color.g, b: sprite.color.b, a: alpha };
+    }
+}

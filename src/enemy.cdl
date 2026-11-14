@@ -1,0 +1,341 @@
+import "drift" { * };
+import "game_state.cdl" { * };
+import "player.cdl" { * };
+import "./dungeon.cdl" { * };
+
+@component struct Enemy {
+    health: int = 6,
+    damage: int = 10,
+    speed: float = 300.0,
+    sides: int = 6,
+    sight: float = 600.0,
+    sees_player: bool = false,
+    attack_cooldown: float = 1.2,    
+    cooldown_left: float = 0.0,       // seconds until it can attack again
+    melee_range: float = 170.0,       // d6: centre to centre; the dice reaches ~128 px
+    lunge_speed: float = 980.0,       // d6: the lunge's sideways and upward speed
+    shot_range: float = 1520.0,        
+    shot_speed: float = 420.0,        // d4: bolt speed, pixels per second
+    hurt_time: float = 0.0,
+    roll_time: float = 0.0,
+    roll_tick: float = 0.0,
+    roll_face: int = 0,
+    slow_time: float = 0.0,
+    invuln: float = 0.0,
+}
+
+const HURT_TIME: float = 0.5;
+const ENEMY_IFRAMES: float = 0.5;
+const PLAYER_IFRAMES: float = 1.0;
+const ROLL_TIME: float = 0.45;
+const ROLL_STEP: float = 0.12;
+const RAM_SPEED: float = 350.0;
+
+@component struct Bolt {
+    dir: Vec2 = Vec2 { .. },
+    speed: float = 420.0,
+    damage: int = 1,
+    life: float = 2.5,
+}
+
+const PLAYER_HIT_RADIUS: float = 110.0;
+
+const WALL_BITS: int = 1;
+const ENEMY_BITS: int = 4;
+
+@resource
+struct Kills {
+    count: int = 0,
+    deaths: Vec2[] = [],
+}
+
+@resource
+struct EnemyAssets {
+    d6: Texture[] = [
+        texture("assets/d6/1d6.png"),
+        texture("assets/d6/2d6.png"),
+        texture("assets/d6/3d6.png"),
+        texture("assets/d6/4d6.png"),
+        texture("assets/d6/5d6.png"),
+        texture("assets/d6/6d6.png"),
+    ],
+
+    d4: Texture[] = [
+        texture("assets/d4/1d4.png"),
+        texture("assets/d4/2d4.png"),
+        texture("assets/d4/3d4.png"),
+        texture("assets/d4/4d4.png"),
+    ]
+}
+
+fn spawn_enemy(cmd: Commands, assets: EnemyAssets, pos: Vec2, sides: int) -> Entity {
+    let r = rng(int(pos.x) + int(pos.y));
+    let tex = assets.d6;
+    if sides == 4 {
+        tex = assets.d4;
+    }
+    let n = r.range(0, sides - 1);
+    let enemy = cmd.spawn([
+        Enemy { sides: sides, health: sides - n , .. },
+        Transform { position: pos, scale: vec2(3.5, 3.5), .. },
+        Sprite { image: tex[sides - 1 - n], layer: 2, .. },
+        RigidBody { .. },
+        Velocity { .. },
+        TextureCollider { category: ENEMY_BITS, .. },
+    ]);
+    return enemy;
+}
+
+@system(in_state: [GameState::Playing])
+fn enemy_movement(enemies: (Enemy, Transform, Velocity)[], player: (Player, Transform)[], physics: Physics, time: Time) {
+    if player.len() == 0 {
+        return;
+    }
+    let target = vec2(0.0, 0.0);
+    for (_, pt) in player {
+        target = pt.position;
+    }
+    for (e, t, v) in enemies {
+        let to = target - t.position;
+        let dist = to.length();
+        e.sees_player = false;
+        if dist > 0.0 && dist <= e.sight {
+            let dir = to.normalized();
+            let ray = physics.raycast_mask(t.position, dir, dist, WALL_BITS);
+            e.sees_player = !ray.hit;
+        }
+        let pace = e.speed;
+        if e.slow_time > 0.0 {
+            e.slow_time -= time.dt;
+            pace = e.speed * 0.35;
+        }
+        if e.sees_player {
+            let dx = 0.0;
+            if to.x > 0.0 { dx = pace; } else { dx = 0.0 - pace; }
+            v.linear = vec2(dx, v.linear.y);
+        } else {
+            v.linear = vec2(0.0, v.linear.y);
+        }
+    }
+}
+
+@system(in_state: [GameState::Playing], after: [enemy_movement])
+fn enemy_attack(enemies: (Enemy, Transform, Velocity)[], player: (Player, Transform, Velocity, Entity)[], time: Time, cmd: Commands, state: State<GameState>) {
+    for (e, t, v) in enemies {
+        if e.cooldown_left > 0.0 {
+            e.cooldown_left -= time.dt;
+        }
+        if !e.sees_player || e.cooldown_left > 0.0 {
+            continue;
+        }
+        for (p, pt, pv, en) in player {
+            let to = pt.position - t.position;
+            let dist = to.length();
+            // d4 ranged attack using particles
+            if e.sides == 4 && dist <= e.shot_range {
+                e.cooldown_left = e.attack_cooldown;
+                spawn_bolt(cmd, t.position, to.normalized(), e.shot_speed, e.damage);
+            }
+            // d6 is a melee brute
+            if e.sides == 6 && dist <= e.melee_range {
+                e.cooldown_left = e.attack_cooldown;
+                // The lunge: a hop at the player, so the attack reads on screen.
+                let side = 1.0;
+                if to.x < 0.0 { side = -1.0; }
+                v.linear = vec2(side * e.lunge_speed, 0.0 - e.lunge_speed);
+                hurt_player(cmd, p, en, pv, state, e.damage);
+            }
+        }
+    }
+}
+
+fn hurt_player(cmd: Commands, p: Player, e: Entity, pv: Velocity, state: State<GameState>, damage: int) {
+    if p.invuln > 0.0 {
+        return;
+    }
+    if p.shield {
+        p.shield = false;
+        p.invuln = 0.4;
+        return;
+    }
+    p.invuln = PLAYER_IFRAMES;
+    p.health = max_int(p.health - 1, 0);
+    pv.linear = vec2(pv.linear.x - 1500, -420.0);
+    if p.health == 0 {
+        state.set(GameState::MainMenu);
+        cmd.despawn(e);
+    }
+}
+
+
+fn spawn_bolt(cmd: Commands, from: Vec2, dir: Vec2, speed: float, damage: int) {
+    cmd.spawn([
+        at(from.x, from.y),
+        Bolt { dir: dir, speed: speed, damage: damage, .. },
+        Circle { radius: 7.0, color: Color { r: 0.75, g: 0.9, b: 1.0, a: 1.0 }, z: 150.0, .. },
+        ParticleEmitter {
+            rate: 70.0, lifetime_min: 0.36, lifetime_max: 0.9,
+            speed_min: 5.0, speed_max: 30.0,
+            size_start: 6.0, size_end: 0.5,
+            color_start: Color { r: 0.55, g: 0.8, b: 1.0, a: 1.0 },
+            color_end: Color { r: 0.3, g: 0.2, b: 1.0, a: 0.0 },
+            blend: Blend::Additive, max_particles: 115, z: 149.0, ..
+        },
+    ]);
+}
+
+
+@system(in_state: [GameState::Playing])
+fn bolts(shots: (Entity, Bolt, Transform)[], player: (Player, Transform, Velocity, Entity)[], physics: Physics, time: Time, cmd: Commands, state: State<GameState>) {
+    for (b_e, b, t) in shots {
+        let step = b.speed * time.dt;
+        let wall = physics.raycast_mask(t.position, b.dir, step, WALL_BITS);
+        b.life -= time.dt;
+        let done = wall.hit || b.life <= 0.0;
+        t.position = t.position + b.dir * step;
+        for (p, pt, pv, e) in player {
+            if !done && t.position.distance(pt.position) <= PLAYER_HIT_RADIUS {
+                hurt_player(cmd, p, e, pv, state, b.damage);
+                done = true;
+            }
+        }
+        if done {
+            cmd.despawn(b_e);
+        }
+    }
+}
+
+@resource
+struct EnemyWaves {
+    every: int = 2,
+    max_extra: int = 8,
+    done: int[] = [],
+}
+
+@system(on_exit: GameState::MainMenu)
+fn new_dungeon(s: DungeonSettings, st: DungeonState, waves: EnemyWaves, random: Random, assets: Assets, window: Window, chunks: (Entity, Chunk)[], bounds: (Entity, DungeonBounds)[], cmd: Commands) {
+    s.seed = random.stream("dungeon").range(1, 1000000000);
+    for (e, _) in chunks {
+        cmd.despawn(e);
+    }
+    for (e, _) in bounds {
+        cmd.despawn(e);
+    }
+    st.spawned = [];
+    waves.done = [];
+    let o = start_dungeon(assets, window, s, st);
+}
+
+@system(in_state: [GameState::Playing], after: [stream_dungeon])
+fn enemy_waves(s: DungeonSettings, st: DungeonState, waves: EnemyWaves, foes: EnemyAssets, cmd: Commands) {
+    let kept: int[] = [];
+    for i in waves.done {
+        if st.spawned.contains(i) {
+            kept.push(i);
+        }
+    }
+    waves.done = kept;
+    for index in st.spawned {
+        if !waves.done.contains(index) {
+            waves.done.push(index);
+            if index >= s.safe_chunks {
+                let extra = index / max_int(waves.every, 1);
+                if extra > waves.max_extra {
+                    extra = waves.max_extra;
+                }
+                let r = rng(s.seed + index * 1013 + 5);
+                let left = float(index * st.chunk_w) * s.scale;
+                let span = float(st.chunk_w) * s.scale;
+                let floor_y = st.floor_top * s.scale;
+                for n in range(extra) {
+                    let sides = 6;
+                    if r.chance(s.d4_chance) {
+                        sides = 4;
+                    }
+                    let x = left + span * r.range_float(0.1, 0.9);
+                    let e = spawn_enemy(cmd, foes, vec2(x, floor_y - 120.0), sides);
+                    cmd.insert(e, Chunk { index: index });
+                }
+            }
+        }
+    }
+}
+
+fn enemy_faces_of(assets: EnemyAssets, sides: int) -> Texture[] {
+    if sides == 4 {
+        return assets.d4;
+    }
+    return assets.d6;
+}
+
+@system(in_state: [GameState::Playing])
+fn enemy_faces(enemies: (Entity, Enemy, Sprite, Transform)[], assets: EnemyAssets, kills: Kills, time: Time, cmd: Commands) {
+    for (id, e, sprite, et) in enemies {
+        if e.invuln > 0.0 {
+            e.invuln -= time.dt;
+        }
+        let faces = enemy_faces_of(assets, e.sides);
+        let n = faces.len();
+        if e.roll_time > 0.0 {
+            e.roll_tick -= time.dt;
+            if e.roll_tick <= 0.0 {
+                e.roll_tick = ROLL_STEP;
+                if e.roll_face > e.health {
+                    e.roll_face -= 1;
+                }
+                if e.roll_face > e.health && e.roll_face >= 1 && e.roll_face <= n {
+                    sprite.image = faces[e.roll_face - 1];
+                } else {
+                    e.roll_time = 0.0;
+                }
+            }
+            if e.roll_time <= 0.0 {
+                if e.health <= 0 {
+                    kills.count += 1;
+                    kills.deaths.push(et.position);
+                    cmd.spawn([
+                        at(et.position.x, et.position.y),
+                        ParticleEmitter {
+                            rate: 0.0, bursts: [Burst { count: 70, .. }],
+                            lifetime_min: 0.9, lifetime_max: 2.34, speed_min: 150.0, speed_max: 620.0,
+                            gravity: vec2(0.0, 1500.0), drag: 0.4,
+                            size_start: 9.0, size_start_max: 14.0, size_end: 2.0,
+                            rotation_min: 0.0, rotation_max: 6.28, spin_min: -10.0, spin_max: 10.0,
+                            color_start: Color { r: 1.0, g: 0.97, b: 0.9, a: 1.0 },
+                            color_end: Color { r: 0.8, g: 0.75, b: 0.7, a: 0.0 },
+                            max_particles: 144, duration: 0.1, looping: false, z: 165.0, ..
+                        },
+                        Lifetime { seconds: 2.88 },
+                    ]);
+                    cmd.spawn([
+                        at(et.position.x, et.position.y),
+                        ParticleEmitter {
+                            rate: 0.0, bursts: [Burst { count: 24, .. }],
+                            lifetime_min: 1.08, lifetime_max: 2.16, speed_min: 30.0, speed_max: 140.0,
+                            gravity: vec2(0.0, -60.0), drag: 1.6,
+                            size_start: 26.0, size_end: 60.0,
+                            color_start: Color { r: 0.9, g: 0.85, b: 0.8, a: 0.45 },
+                            color_end: Color { r: 0.5, g: 0.45, b: 0.45, a: 0.0 },
+                            max_particles: 54, duration: 0.1, looping: false, z: 164.0, ..
+                        },
+                        Lifetime { seconds: 2.7 },
+                    ]);
+                    cmd.despawn(id);
+                } else {
+                    let face = e.health;
+                    if face > n {
+                        face = n;
+                    }
+                    sprite.image = faces[face - 1];
+                }
+            }
+        }
+        if e.hurt_time > 0.0 {
+            e.hurt_time = max(e.hurt_time - time.dt, 0.0);
+            let k = e.hurt_time / HURT_TIME;
+            sprite.color = Color { r: 1.0, g: 1.0 - 0.8 * k, b: 1.0 - 0.8 * k, a: 1.0 };
+        } else {
+            sprite.color = Color { .. };
+        }
+    }
+}

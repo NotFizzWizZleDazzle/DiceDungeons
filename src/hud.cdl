@@ -1,0 +1,106 @@
+import "drift" { * };
+import "game_state.cdl" { * };
+import "player.cdl" { * };
+import "enemy.cdl" { * };
+
+const HUD_X: float = 40.0;
+const HUD_Y: float = 44.0;
+const DOT_SCALE: float = 3.0;
+const DOT_GAP: float = 56.0;
+const CELLS: int = 10;
+const CELL: float = 30.0;
+const CELL_GAP: float = 2.0;
+
+@resource
+struct HudArt {
+    heart: Texture = texture("assets/healthPickup.png"),
+    heart_lost: Texture = texture("assets/healthPickupGray.png"),
+}
+
+@component
+struct HudPart {}
+
+@component
+struct HealthDot {
+    index: int = 0,
+}
+
+@component
+struct ManaCell {
+    index: int = 0,
+}
+
+@system(on_exit: GameState::MainMenu)
+fn spawn_hud(cmd: Commands) {
+    let bar_y = HUD_Y + 64.0;
+    let w = float(CELLS) * (CELL + CELL_GAP) - CELL_GAP;
+    cmd.spawn([
+        at(HUD_X - 4.0, bar_y),
+        Rectangle { size: vec2(w + 8.0, CELL + 8.0), color: Color { r: 0.05, g: 0.05, b: 0.08, a: 0.85 }, pivot: vec2(0.0, 0.5), z: 0.0, layer: hud_layer(), .. },
+        HudPart {},
+    ]);
+    for i in range(CELLS) {
+        cmd.spawn([
+            at(HUD_X + float(i) * (CELL + CELL_GAP), bar_y),
+            Rectangle { size: vec2(CELL, CELL), color: Color { r: 0.25, g: 0.5, b: 1.0, a: 1.0 }, pivot: vec2(0.0, 0.5), z: 1.0, layer: hud_layer(), .. },
+            ManaCell { index: i },
+            HudPart {},
+        ]);
+    }
+}
+
+@system(on_enter: GameState::MainMenu)
+fn clear_hud(parts: (Entity, HudPart)[], cmd: Commands) {
+    for (e, _) in parts {
+        cmd.despawn(e);
+    }
+}
+
+@system(in_state: [GameState::Playing, GameState::PickingUpgrade])
+fn update_hud(players: (Entity, Player)[], dots: (Entity, HealthDot, Sprite)[], cells: (ManaCell, Rectangle)[], art: HudArt, cmd: Commands) {
+    let health = 0;
+    let max_health = 0;
+    let mana = 0;
+    let max_mana = 1;
+    for (_, p) in players {
+        health = p.health;
+        max_health = p.max_health;
+        mana = p.mana;
+        max_mana = max_int(p.max_mana, 1);
+    }
+
+    let have: int[] = [];
+    for (e, d, sprite) in dots {
+        if d.index >= max_health {
+            cmd.despawn(e);
+        } else {
+            have.push(d.index);
+            sprite.color = Color { .. };
+            if d.index < health {
+                sprite.image = art.heart;
+            } else {
+                sprite.image = art.heart_lost;
+            }
+        }
+    }
+    for i in range(max_health) {
+        if !have.contains(i) {
+            cmd.spawn([
+                Transform { position: vec2(HUD_X + 24.0 + DOT_GAP * float(i), HUD_Y), scale: vec2(DOT_SCALE, DOT_SCALE), .. },
+                Sprite { image: art.heart, z: 1.0, layer: hud_layer(), .. },
+                HealthDot { index: i },
+                HudPart {},
+            ]);
+        }
+    }
+
+    let lit = int(float(CELLS) * float(mana) / float(max_mana) + 0.5);
+    for (c, r) in cells {
+        if c.index < lit {
+            r.color = Color { r: 0.25, g: 0.5, b: 1.0, a: 1.0 };
+        } else {
+            r.color = Color { r: 0.12, g: 0.14, b: 0.22, a: 1.0 };
+        }
+    }
+    
+}

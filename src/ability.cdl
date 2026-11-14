@@ -1,0 +1,847 @@
+import "drift" { * };
+import "game_state.cdl" { * };
+import "player.cdl" { * };
+import "enemy.cdl" { * };
+import "card.cdl" { * };
+
+const BOLT_COOLDOWN: float = 0.35;
+const BOLT_COST: int = 15;
+const FIRE_COOLDOWN: float = 1.2;
+const ICE_COOLDOWN: float = 0.6;
+const CHAIN_COOLDOWN: float = 1.5;
+const GAS_COOLDOWN: float = 3.0;
+const ENEMY_HIT_RADIUS: float = 55.0;
+const CAST_OFFSET: float = 130.0;
+const FIREBALL_SPEED: float = 720.0;
+const FIREBALL_LOFT: float = 380.0;
+const SHIELD_COOLDOWN: float = 8.0;
+const SHIELD_TIME: float = 6.0;
+const SHIELD_RADIUS: float = 150.0;
+const CORE_CLEAR: float = 64.0;
+const MANA_REGEN: float = 10.0;
+const MANA_PER_KILL: int = 6;
+const FIRE_COST: int = 25;
+const ICE_COST: int = 12;
+const CHAIN_COST: int = 30;
+const GAS_COST: int = 35;
+
+@resource
+struct AbilityState {
+    applied: int = 0,
+    bolt_cd: float = 0.0,
+    mana_acc: float = 0.0,
+    kills_seen: int = 0,
+    selected: string = "firebolt",
+    known: int = 0,
+    shield_on: bool = false,
+    shield_cd: float = 0.0,
+    shield_left: float = 0.0,
+    shield_fx: Entity = Entity { .. },
+    fire_cd: float = 0.0,
+    ice_cd: float = 0.0,
+    chain_cd: float = 0.0,
+    gas_cd: float = 0.0,
+}
+
+@component
+struct FireBolt {
+    vel: Vec2 = Vec2 { .. },
+    gravity: float = 700.0,
+    damage: int = 1,
+    life: float = 1.0,
+}
+
+@component
+struct Fireball {
+    vel: Vec2 = Vec2 { .. },
+    gravity: float = 900.0,
+    damage: int = 4,
+    radius: float = 470.0,
+    life: float = 3.0,
+    smoke: Entity = Entity { .. },
+    sparks: Entity = Entity { .. },
+}
+
+@component
+struct IceKnife {
+    vel: Vec2 = Vec2 { .. },
+    gravity: float = 900.0,
+    damage: int = 1,
+    life: float = 2.0,
+    slow: float = 2.0,
+    hit: int[] = [],
+    sparkle: Entity = Entity { .. },
+}
+
+@component
+struct GasCloud {
+    radius: float = 450.0,
+    damage: int = 1,
+    every: float = 0.6,
+    tick: float = 0.0,
+    life: float = 4.0,
+    fall: float = 0.0,
+    landed: bool = false,
+    bubbles: Entity = Entity { .. },
+}
+
+@component
+struct Throw {
+    kind: string = "",
+    vel: Vec2 = Vec2 { .. },
+    gravity: float = 1000.0,
+    level: int = 1,
+    life: float = 3.0,
+}
+
+@component
+struct Fx {
+    life: float = 1.0,
+}
+
+fn damage_enemy(e: Enemy, amount: int) {
+    if e.invuln > 0.0 || e.health <= 0 {
+        return;
+    }
+    e.invuln = ENEMY_IFRAMES;
+    e.roll_face = e.health;
+    e.health = max_int(e.health - amount, 0);
+    e.hurt_time = HURT_TIME;
+    e.roll_time = ROLL_TIME;
+    e.roll_tick = ROLL_STEP;
+}
+
+fn attack_slots(owned: Abilities) -> string[] {
+    let slots: string[] = ["firebolt"];
+    for a in owned.owned {
+        if (a == "fireball" || a == "iceknife" || a == "chainbolt" || a == "gascloud") && !slots.contains(a) {
+            slots.push(a);
+        }
+    }
+    return slots;
+}
+
+fn enemy_reach(et: Transform) -> float {
+    return 16.0 * et.scale.x + 12.0;
+}
+
+fn in_wall(physics: Physics, p: Vec2) -> bool {
+    return physics.overlap_circle_mask(p, 3.0, WALL_BITS).len() > 0;
+}
+
+fn count_of(owned: Abilities, name: string) -> int {
+    let n = 0;
+    for a in owned.owned {
+        if a == name {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+fn col(r: float, g: float, b: float, a: float) -> Color {
+    return Color { r: r, g: g, b: b, a: a };
+}
+
+fn fx(cmd: Commands, at_pos: Vec2, e: ParticleEmitter, life: float) -> Entity {
+    return cmd.spawn([at(at_pos.x, at_pos.y), e, Fx { life: life }]);
+}
+
+fn flash(cmd: Commands, at_pos: Vec2, c: Color, intensity: float, radius: float, life: float) {
+    cmd.spawn([
+        at(at_pos.x, at_pos.y),
+        PointLight { color: c, intensity: intensity, radius: radius, falloff: 1.4, shadows: false, .. },
+        Fx { life: life },
+    ]);
+}
+
+fn burst(cmd: Commands, at_pos: Vec2, count: int, speed_max: float, size: float, from: Color, to: Color, life: float) {
+    cmd.spawn([
+        at(at_pos.x, at_pos.y),
+        ParticleEmitter {
+            rate: 0.0, bursts: [Burst { count: count, .. }],
+            lifetime_min: life * 0.4 * 1.8, lifetime_max: life * 1.8,
+            speed_min: speed_max * 0.2, speed_max: speed_max,
+            size_start: size, size_end: size * 0.15,
+            color_start: from, color_end: to,
+            drag: 1.5, blend: Blend::Additive,
+            max_particles: count + 10, duration: 0.2, looping: false, z: 160.0, ..
+        },
+        Fx { life: life * 1.8 + 0.3 },
+    ]);
+}
+
+@system(on_exit: GameState::MainMenu)
+fn reset_abilities(st: AbilityState, cmd: Commands) {
+    st.applied = 0;
+    st.kills_seen = 0;
+    st.selected = "firebolt";
+    st.known = 0;
+    st.shield_cd = 0.0;
+    st.shield_left = 0.0;
+    if st.shield_on {
+        cmd.despawn(st.shield_fx);
+        st.shield_on = false;
+    }
+    st.bolt_cd = 0.0;
+    st.fire_cd = 0.0;
+    st.ice_cd = 0.0;
+    st.chain_cd = 0.0;
+    st.gas_cd = 0.0;
+}
+
+@system(in_state: [GameState::Playing])
+fn apply_picks(player: (Player, Transform)[], owned: Abilities, st: AbilityState, cmd: Commands) {
+    for (p, t) in player {
+        while st.applied < owned.owned.len() {
+            let name = owned.owned[st.applied];
+            if name == "health" {
+                p.health = p.max_health;
+                burst(cmd, t.position, 60, 260.0, 9.0,
+                      Color { r: 0.4, g: 1.0, b: 0.5, a: 1.0 }, Color { r: 0.1, g: 0.8, b: 0.2, a: 0.0 }, 0.9);
+            }
+            if name == "maxhealth" {
+                p.max_health += 1;
+                p.health += 1;
+                burst(cmd, t.position, 70, 300.0, 10.0,
+                      Color { r: 1.0, g: 0.4, b: 0.45, a: 1.0 }, Color { r: 0.8, g: 0.1, b: 0.2, a: 0.0 }, 0.9);
+            }
+            if name == "maxmana" {
+                p.max_mana += 10;
+                p.mana = min_int_of(p.mana + 10, p.max_mana);
+                burst(cmd, t.position, 70, 300.0, 10.0,
+                      Color { r: 0.4, g: 0.6, b: 1.0, a: 1.0 }, Color { r: 0.15, g: 0.25, b: 0.9, a: 0.0 }, 0.9);
+            }
+            if name == "speed" {
+                p.speed += 0.25;
+                burst(cmd, t.position, 60, 320.0, 8.0,
+                      Color { r: 0.5, g: 0.85, b: 1.0, a: 1.0 }, Color { r: 0.2, g: 0.4, b: 1.0, a: 0.0 }, 0.8);
+            }
+            st.applied += 1;
+        }
+    }
+}
+
+@system(in_state: [GameState::Playing])
+fn cast_abilities(player: (Player, Transform)[], enemies: (Entity, Enemy, Transform)[], owned: Abilities, st: AbilityState, kills: Kills, input: Input, time: Time, physics: Physics, cmd: Commands) {
+    st.bolt_cd -= time.dt;
+    st.fire_cd -= time.dt;
+    st.ice_cd -= time.dt;
+    st.chain_cd -= time.dt;
+    st.gas_cd -= time.dt;
+    let gained = kills.count - st.kills_seen;
+    if gained < 0 {
+        gained = 0;
+    }
+    st.kills_seen = kills.count;
+    for (p, _) in player {
+        p.mana = min_int_of(p.mana + gained * MANA_PER_KILL, p.max_mana);
+        if p.mana < p.max_mana {
+            let fill = float(p.mana) / float(max_int(p.max_mana, 1));
+            st.mana_acc += MANA_REGEN * (0.3 + 1.3 * fill) * time.dt;
+            while st.mana_acc >= 1.0 && p.mana < p.max_mana {
+                st.mana_acc -= 1.0;
+                p.mana += 1;
+            }
+        } else {
+            st.mana_acc = 0.0;
+        }
+    }
+    let slots = attack_slots(owned);
+    while st.known < owned.owned.len() {
+        let name = owned.owned[st.known];
+        if slots.contains(name) {
+            st.selected = name;
+        }
+        st.known += 1;
+    }
+    let keys = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5];
+    for i in range(keys.len()) {
+        if i < slots.len() && input.key_pressed(keys[i]) {
+            st.selected = slots[i];
+        }
+    }
+    let at_slot = 0;
+    for i in range(slots.len()) {
+        if slots[i] == st.selected {
+            at_slot = i;
+        }
+    }
+    if input.key_pressed(Key::E) {
+        st.selected = slots[(at_slot + 1) % slots.len()];
+    }
+    if input.key_pressed(Key::Q) {
+        st.selected = slots[(at_slot + slots.len() - 1) % slots.len()];
+    }
+    if !input.mouse_pressed(MouseButton::Left) {
+        return;
+    }
+    let mouse = input.mouse_world();
+    for (p, t) in player {
+        let aim = mouse - t.position;
+        if aim.length() < 1.0 {
+            aim = vec2(1.0, 0.0);
+        }
+        aim = aim.normalized();
+        let from = t.position + aim * CAST_OFFSET;
+        let path = physics.raycast_mask(t.position, aim, CAST_OFFSET, WALL_BITS);
+        if path.hit {
+            from = path.point - aim * 2.0;
+        }
+
+        if st.selected == "firebolt" && st.bolt_cd <= 0.0 && p.mana >= BOLT_COST {
+            st.bolt_cd = BOLT_COOLDOWN;
+            p.mana -= BOLT_COST;
+            spawn_fire_bolt(cmd, from, aim);
+        }
+
+        let fire = count_of(owned, "fireball");
+        if st.selected == "fireball" && fire > 0 && st.fire_cd <= 0.0 && p.mana >= FIRE_COST {
+            st.fire_cd = FIRE_COOLDOWN;
+            p.mana -= FIRE_COST;
+            spawn_fireball(cmd, from, aim, 1 + fire, 140.0 + 30.0 * float(fire));
+        }
+        let ice = count_of(owned, "iceknife");
+        if st.selected == "iceknife" && ice > 0 && st.ice_cd <= 0.0 && p.mana >= ICE_COST {
+            st.ice_cd = ICE_COOLDOWN;
+            p.mana -= ICE_COST;
+            spawn_ice_knife(cmd, from, aim, ice);
+        }
+        let chain = count_of(owned, "chainbolt");
+        if st.selected == "chainbolt" && chain > 0 && st.chain_cd <= 0.0 && p.mana >= CHAIN_COST {
+            st.chain_cd = CHAIN_COOLDOWN;
+            p.mana -= CHAIN_COST;
+            spawn_throw(cmd, from, aim, "chain", chain);
+        }
+        let gas = count_of(owned, "gascloud");
+        if st.selected == "gascloud" && gas > 0 && st.gas_cd <= 0.0 && p.mana >= GAS_COST {
+            st.gas_cd = GAS_COOLDOWN;
+            p.mana -= GAS_COST;
+            spawn_throw(cmd, from, aim, "gas", gas);
+        }
+    }
+}
+
+fn spawn_fireball(cmd: Commands, from: Vec2, dir: Vec2, damage: int, radius: float) {
+    let smoke = cmd.spawn([
+        at(from.x, from.y),
+        ParticleEmitter {
+            rate: 45.0, lifetime_min: 1.44, lifetime_max: 2.88,
+            speed_min: 5.0, speed_max: 30.0, gravity: vec2(0.0, -60.0), drag: 0.8,
+            size_start: 14.0, size_start_max: 20.0, size_end: 46.0,
+            color_start: col(0.35, 0.3, 0.28, 0.45), color_end: col(0.15, 0.13, 0.12, 0.0),
+            spin_min: -1.5, spin_max: 1.5,
+            blend: Blend::Alpha, max_particles: 162, z: 150.0, ..
+        },
+    ]);
+    let sparks = cmd.spawn([
+        at(from.x, from.y),
+        ParticleEmitter {
+            rate: 70.0, lifetime_min: 0.54, lifetime_max: 1.44,
+            speed_min: 60.0, speed_max: 220.0, gravity: vec2(0.0, 700.0),
+            size_start: 4.0, size_end: 0.5,
+            color_start: col(1.0, 0.95, 0.6, 1.0), color_end: col(1.0, 0.35, 0.0, 0.0),
+            blend: Blend::Additive, max_particles: 144, z: 156.0, ..
+        },
+    ]);
+    cmd.spawn([
+        at(from.x, from.y),
+        Fireball { vel: dir * FIREBALL_SPEED + vec2(0.0, 0.0 - FIREBALL_LOFT), damage: damage, radius: radius, smoke: smoke, sparks: sparks, .. },
+        Circle { radius: 15.0, color: col(1.0, 0.9, 0.55, 1.0), z: 155.0, .. },
+        PointLight { color: col(1.0, 0.55, 0.15, 1.0), intensity: 2.5, radius: 260.0, falloff: 1.5, shadows: false, .. },
+        ParticleEmitter {
+            rate: 220.0, lifetime_min: 0.36, lifetime_max: 0.99,
+            speed_min: 10.0, speed_max: 70.0,
+            size_start: 14.0, size_start_max: 22.0, size_end: 1.0,
+            color_start: col(1.0, 0.75, 0.25, 1.0), color_end: col(0.85, 0.1, 0.0, 0.0),
+            shape: EmitShape::Circle, shape_radius: 10.0, spin_min: -4.0, spin_max: 4.0,
+            blend: Blend::Additive, max_particles: 360, z: 154.0, ..
+        },
+    ]);
+    burst(cmd, from, 30, 260.0, 9.0, col(1.0, 0.85, 0.4, 1.0), col(1.0, 0.3, 0.0, 0.0), 0.35);
+}
+
+fn spawn_ice_knife(cmd: Commands, from: Vec2, dir: Vec2, damage: int) {
+    let sparkle = cmd.spawn([
+        at(from.x, from.y),
+        ParticleEmitter {
+            rate: 60.0, lifetime_min: 0.54, lifetime_max: 1.44,
+            speed_min: 20.0, speed_max: 90.0, gravity: vec2(0.0, 120.0),
+            size_start: 4.0, size_end: 0.5, rotation_min: 0.0, rotation_max: 6.28, spin_min: -6.0, spin_max: 6.0,
+            color_start: col(1.0, 1.0, 1.0, 1.0), color_end: col(0.6, 0.85, 1.0, 0.0),
+            blend: Blend::Additive, max_particles: 126, z: 157.0, ..
+        },
+    ]);
+    cmd.spawn([
+        Transform { position: from, rotation: dir.angle(), scale: vec2(2.5, 2.5), .. },
+        IceKnife { vel: dir * 600.0, damage: damage, sparkle: sparkle, .. },
+        Sprite { image: texture("assets/fx/iceKnife.png"), z: 155.0, .. },
+        PointLight { color: col(0.55, 0.85, 1.0, 1.0), intensity: 1.6, radius: 220.0, falloff: 1.5, shadows: false, .. },
+        ParticleEmitter {
+            rate: 120.0, lifetime_min: 0.72, lifetime_max: 1.62,
+            speed_min: 5.0, speed_max: 25.0, drag: 1.0,
+            size_start: 16.0, size_start_max: 22.0, size_end: 34.0,
+            shape: EmitShape::Circle, shape_radius: 10.0, spin_min: -1.0, spin_max: 1.0,
+            color_start: col(0.75, 0.92, 1.0, 0.55), color_end: col(0.4, 0.6, 1.0, 0.0),
+            blend: Blend::Alpha, max_particles: 234, z: 154.0, ..
+        },
+    ]);
+    burst(cmd, from, 20, 200.0, 6.0, col(0.9, 1.0, 1.0, 1.0), col(0.4, 0.7, 1.0, 0.0), 0.3);
+}
+
+fn ice_shatter(cmd: Commands, at_pos: Vec2, big: bool) {
+    let n = 26;
+    if big {
+        n = 50;
+    }
+    flash(cmd, at_pos, col(0.6, 0.9, 1.0, 1.0), 2.5, 260.0, 0.12);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: n, .. }],
+        lifetime_min: 0.72, lifetime_max: 1.62, speed_min: 140.0, speed_max: 480.0, gravity: vec2(0.0, 1200.0),
+        size_start: 6.0, size_start_max: 9.0, size_end: 1.0, rotation_min: 0.0, rotation_max: 6.28, spin_min: -9.0, spin_max: 9.0,
+        color_start: col(0.92, 0.98, 1.0, 1.0), color_end: col(0.5, 0.75, 1.0, 0.0),
+        blend: Blend::Additive, max_particles: n + 10, duration: 0.1, looping: false, z: 170.0, ..
+    }, 2.16);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: n / 2, .. }],
+        lifetime_min: 1.08, lifetime_max: 2.16, speed_min: 20.0, speed_max: 120.0, drag: 1.8,
+        size_start: 22.0, size_end: 56.0, color_start: col(0.8, 0.93, 1.0, 0.5), color_end: col(0.5, 0.7, 1.0, 0.0),
+        blend: Blend::Alpha, max_particles: n, duration: 0.1, looping: false, z: 166.0, ..
+    }, 2.7);
+}
+
+fn spawn_gas(cmd: Commands, where_at: Vec2, damage: int) {
+    let bubbles = fx(cmd, where_at, ParticleEmitter {
+        rate: 30.0, lifetime_min: 1.44, lifetime_max: 3.24,
+        speed_min: 10.0, speed_max: 40.0, gravity: vec2(0.0, -70.0),
+        size_start: 5.0, size_start_max: 9.0, size_end: 11.0,
+        color_start: col(0.65, 1.0, 0.35, 0.9), color_end: col(0.3, 0.8, 0.1, 0.0),
+        shape: EmitShape::Circle, shape_radius: 120.0,
+        blend: Blend::Additive, max_particles: 126, z: 151.0, ..
+    }, 10.8);
+    cmd.spawn([
+        at(where_at.x, where_at.y),
+        GasCloud { damage: damage, bubbles: bubbles, .. },
+        ParticleEmitter {
+            rate: 110.0, lifetime_min: 2.16, lifetime_max: 4.32, prewarm: 0.6,
+            speed_min: 5.0, speed_max: 35.0, drag: 0.8,
+            size_start: 30.0, size_start_max: 48.0, size_end: 80.0,
+            color_start: col(0.42, 0.85, 0.22, 0.45), color_end: col(0.18, 0.4, 0.08, 0.0),
+            shape: EmitShape::Circle, shape_radius: 130.0,
+            spin_min: -1.2, spin_max: 1.2,
+            blend: Blend::Alpha, max_particles: 576, z: 150.0, ..
+        },
+    ]);
+    flash(cmd, where_at, col(0.4, 1.0, 0.3, 1.0), 2.0, 380.0, 0.2);
+}
+
+fn spark_line(cmd: Commands, a: Vec2, b: Vec2) {
+    let d = b - a;
+    let steps = int(d.length() / 18.0) + 1;
+    for i in range(steps + 1) {
+        let k = float(i) / float(steps);
+        let jitter = vec2(sin(float(i) * 12.9898) * 10.0, cos(float(i) * 78.233) * 10.0);
+        fx(cmd, a + d * k + jitter, ParticleEmitter {
+            rate: 0.0, bursts: [Burst { count: 10, .. }],
+            lifetime_min: 0.18, lifetime_max: 0.81, speed_min: 20.0, speed_max: 160.0, gravity: vec2(0.0, 900.0),
+            size_start: 7.0, size_start_max: 10.0, size_end: 0.5,
+            color_start: col(0.92, 0.97, 1.0, 1.0), color_end: col(0.45, 0.55, 1.0, 0.0),
+            blend: Blend::Additive, max_particles: 25, duration: 0.1, looping: false, z: 172.0, ..
+        }, 0.9);
+    }
+}
+
+fn zap(cmd: Commands, at_pos: Vec2) {
+    flash(cmd, at_pos, col(0.6, 0.75, 1.0, 1.0), 4.0, 320.0, 0.12);
+    burst(cmd, at_pos, 50, 420.0, 8.0, col(0.95, 0.98, 1.0, 1.0), col(0.4, 0.5, 1.0, 0.0), 0.45);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: 40, .. }],
+        lifetime_min: 0.27, lifetime_max: 0.54, speed_min: 600.0, speed_max: 700.0, drag: 5.0, gravity: vec2(0.0, 900.0),
+        size_start: 5.0, size_end: 1.0, shape: EmitShape::Ring, shape_radius: 16.0,
+        color_start: col(0.85, 0.95, 1.0, 1.0), color_end: col(0.4, 0.5, 1.0, 0.0),
+        blend: Blend::Additive, max_particles: 90, duration: 0.1, looping: false, z: 173.0, ..
+    }, 1.08);
+}
+
+fn chain_bolt(cmd: Commands, physics: Physics, from: Vec2, enemies: (Entity, Enemy, Transform)[], jumps: int, damage: int) {
+    let hit: int[] = [];
+    let here = from;
+    let reach = 500.0;
+    for j in range(jumps) {
+        let best = -1;
+        let best_d = reach;
+        let i = 0;
+        for (id, _, et) in enemies {
+            let d = here.distance(et.position);
+            let skip = 0.0;
+            let clear = d > skip && !physics.raycast_mask(here + (et.position - here).normalized() * skip, (et.position - here).normalized(), d - skip, WALL_BITS).hit;
+            if d <= best_d && !hit.contains(id.id) && clear {
+                best = i;
+                best_d = d;
+            }
+            i += 1;
+        }
+        if best < 0 {
+            return;
+        }
+        let i2 = 0;
+        for (id, e, et) in enemies {
+            if i2 == best {
+                hit.push(id.id);
+                spark_line(cmd, here, et.position);
+                damage_enemy(e, damage);
+                zap(cmd, et.position);
+                here = et.position;
+            }
+            i2 += 1;
+        }
+        reach = 320.0;
+    }
+}
+
+fn explode(cmd: Commands, at_pos: Vec2, b: Fireball, enemies: (Entity, Enemy, Transform)[]) {
+    for (_, e, et) in enemies {
+        if at_pos.distance(et.position) <= b.radius {
+            damage_enemy(e, b.damage);
+        }
+    }
+    flash(cmd, at_pos, col(1.0, 0.6, 0.2, 1.0), 9.0, 900.0, 0.18);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: 14, .. }],
+        lifetime_min: 0.14, lifetime_max: 0.29, speed_min: 0.0, speed_max: 40.0,
+        size_start: 120.0, size_end: 200.0, color_start: col(1.0, 1.0, 0.9, 1.0), color_end: col(1.0, 0.7, 0.3, 0.0),
+        blend: Blend::Additive, max_particles: 36, duration: 0.1, looping: false, z: 170.0, ..
+    }, 0.72);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: 220, .. }],
+        lifetime_min: 0.54, lifetime_max: 1.62, speed_min: 80.0, speed_max: 720.0, drag: 2.2,
+        size_start: 18.0, size_start_max: 30.0, size_end: 2.0,
+        color_start: col(1.0, 0.8, 0.3, 1.0), color_end: col(0.75, 0.05, 0.0, 0.0),
+        spin_min: -6.0, spin_max: 6.0, blend: Blend::Additive, max_particles: 432, duration: 0.1, looping: false, z: 168.0, ..
+    }, 2.16);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: 90, .. }],
+        lifetime_min: 0.45, lifetime_max: 0.81, speed_min: 900.0, speed_max: 1000.0, drag: 4.0,
+        size_start: 10.0, size_end: 2.0, shape: EmitShape::Ring, shape_radius: 30.0,
+        color_start: col(1.0, 0.95, 0.75, 0.9), color_end: col(1.0, 0.5, 0.1, 0.0),
+        blend: Blend::Additive, max_particles: 180, duration: 0.1, looping: false, z: 169.0, ..
+    }, 1.44);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: 120, .. }],
+        lifetime_min: 1.08, lifetime_max: 2.52, speed_min: 300.0, speed_max: 1100.0, gravity: vec2(0.0, 1400.0), drag: 0.6,
+        size_start: 5.0, size_end: 1.0,
+        color_start: col(1.0, 1.0, 0.7, 1.0), color_end: col(1.0, 0.35, 0.0, 0.0),
+        blend: Blend::Additive, max_particles: 234, duration: 0.1, looping: false, z: 171.0, ..
+    }, 3.24);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: 70, .. }],
+        lifetime_min: 2.7, lifetime_max: 5.4, speed_min: 20.0, speed_max: 220.0, gravity: vec2(0.0, -50.0), drag: 1.5,
+        size_start: 4.0, size_start_max: 7.0, size_end: 1.0,
+        color_start: col(1.0, 0.65, 0.2, 1.0), color_end: col(0.9, 0.2, 0.0, 0.0),
+        shape: EmitShape::Circle, shape_radius: 60.0,
+        blend: Blend::Additive, max_particles: 144, duration: 0.1, looping: false, z: 167.0, ..
+    }, 5.94);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: 55, .. }],
+        lifetime_min: 2.52, lifetime_max: 4.68, speed_min: 30.0, speed_max: 180.0, gravity: vec2(0.0, -90.0), drag: 1.8,
+        size_start: 30.0, size_start_max: 44.0, size_end: 110.0,
+        color_start: col(0.28, 0.24, 0.22, 0.55), color_end: col(0.1, 0.09, 0.09, 0.0),
+        shape: EmitShape::Circle, shape_radius: 50.0, spin_min: -1.0, spin_max: 1.0,
+        blend: Blend::Alpha, max_particles: 108, duration: 0.1, looping: false, z: 165.0, ..
+    }, 5.22);
+}
+
+@system(in_state: [GameState::Playing])
+fn fly_fireballs(balls: (Entity, Fireball, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
+    for (be, b, t) in balls {
+        b.vel = b.vel + vec2(0.0, b.gravity * time.dt);
+        let step = b.vel * time.dt;
+        let len = step.length();
+        let hit_wall = false;
+        if len > 0.0 {
+            hit_wall = physics.raycast_mask(t.position, step * (1.0 / len), len, WALL_BITS).hit;
+        }
+        if in_wall(physics, t.position) {
+            hit_wall = true;
+        }
+        b.life -= time.dt;
+        t.position = t.position + step;
+        cmd.insert(b.smoke, Transform { position: t.position, .. });
+        cmd.insert(b.sparks, Transform { position: t.position, .. });
+        let boom = hit_wall || b.life <= 0.0;
+        for (_, _, et) in enemies {
+            if t.position.distance(et.position) <= enemy_reach(et) {
+                boom = true;
+            }
+        }
+        if boom {
+            explode(cmd, t.position, b, enemies);
+            cmd.insert(b.smoke, Fx { life: 2.16 });
+            cmd.insert(b.sparks, Fx { life: 0.9 });
+            cmd.despawn(be);
+        }
+    }
+}
+
+@system(in_state: [GameState::Playing])
+fn fly_ice_knives(knives: (Entity, IceKnife, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
+    for (ke, k, t) in knives {
+        k.vel = k.vel + vec2(0.0, k.gravity * time.dt);
+        let step = k.vel * time.dt;
+        let len = step.length();
+        let hit_wall = false;
+        if len > 0.0 {
+            hit_wall = physics.raycast_mask(t.position, step * (1.0 / len), len, WALL_BITS).hit;
+        }
+        if in_wall(physics, t.position) {
+            hit_wall = true;
+        }
+        k.life -= time.dt;
+        t.position = t.position + step;
+        t.rotation = k.vel.angle();
+        cmd.insert(k.sparkle, Transform { position: t.position, .. });
+        for (id, e, et) in enemies {
+            if t.position.distance(et.position) <= enemy_reach(et) + 14.0 && !k.hit.contains(id.id) {
+                k.hit.push(id.id);
+                damage_enemy(e, k.damage);
+                e.slow_time = k.slow;
+                ice_shatter(cmd, et.position, true);
+            }
+        }
+        if hit_wall || k.life <= 0.0 {
+            ice_shatter(cmd, t.position, false);
+            cmd.insert(k.sparkle, Fx { life: 1.44 });
+            cmd.despawn(ke);
+        }
+    }
+}
+
+@system(in_state: [GameState::Playing])
+fn gas_clouds(clouds: (Entity, GasCloud, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
+    for (ce, c, t) in clouds {
+        if !c.landed {
+            c.fall += 1400.0 * time.dt;
+            let drop = c.fall * time.dt;
+            let ground = physics.raycast_mask(t.position, vec2(0.0, 1.0), drop + 40.0, WALL_BITS);
+            if ground.hit {
+                t.position = vec2(t.position.x, ground.point.y - 40.0);
+                c.landed = true;
+                flash(cmd, t.position, col(0.4, 1.0, 0.3, 1.0), 2.0, 380.0, 0.2);
+            } else {
+                t.position = t.position + vec2(0.0, drop);
+            }
+            cmd.insert(c.bubbles, Transform { position: t.position, .. });
+        }
+        c.life -= time.dt;
+        c.tick -= time.dt;
+        if c.tick <= 0.0 {
+            c.tick = c.every;
+            for (_, e, et) in enemies {
+                if t.position.distance(et.position) <= c.radius {
+                    damage_enemy(e, c.damage);
+                }
+            }
+        }
+        if c.life <= 0.0 {
+            cmd.insert(c.bubbles, Fx { life: 0.18 });
+            cmd.despawn(ce);
+        }
+    }
+}
+
+@system
+fn fade_fx(fx: (Entity, Fx)[], time: Time, cmd: Commands) {
+    for (e, f) in fx {
+        f.life -= time.dt;
+        if f.life <= 0.0 {
+            cmd.despawn(e);
+        }
+    }
+}
+
+fn spawn_fire_bolt(cmd: Commands, from: Vec2, dir: Vec2) {
+    cmd.spawn([
+        at(from.x, from.y),
+        FireBolt { vel: dir * 950.0, .. },
+        Circle { radius: 8.0, color: col(1.0, 0.92, 0.6, 1.0), z: 155.0, .. },
+        PointLight { color: col(1.0, 0.6, 0.2, 1.0), intensity: 1.4, radius: 160.0, falloff: 1.6, shadows: false, .. },
+        ParticleEmitter {
+            rate: 180.0, lifetime_min: 0.22, lifetime_max: 0.63,
+            speed_min: 10.0, speed_max: 70.0,
+            size_start: 9.0, size_start_max: 12.0, size_end: 0.5,
+            color_start: col(1.0, 0.7, 0.2, 1.0), color_end: col(0.8, 0.1, 0.0, 0.0),
+            shape: EmitShape::Circle, shape_radius: 4.0, spin_min: -5.0, spin_max: 5.0,
+            blend: Blend::Additive, max_particles: 162, z: 154.0, ..
+        },
+    ]);
+    burst(cmd, from, 16, 200.0, 7.0, col(1.0, 0.9, 0.5, 1.0), col(1.0, 0.3, 0.0, 0.0), 0.25);
+}
+
+fn bolt_impact(cmd: Commands, at_pos: Vec2) {
+    flash(cmd, at_pos, col(1.0, 0.55, 0.2, 1.0), 3.0, 260.0, 0.1);
+    burst(cmd, at_pos, 40, 340.0, 8.0, col(1.0, 0.85, 0.35, 1.0), col(0.8, 0.1, 0.0, 0.0), 0.45);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: 24, .. }],
+        lifetime_min: 0.54, lifetime_max: 1.26, speed_min: 150.0, speed_max: 520.0, gravity: vec2(0.0, 1300.0),
+        size_start: 3.5, size_end: 0.5, color_start: col(1.0, 1.0, 0.7, 1.0), color_end: col(1.0, 0.4, 0.0, 0.0),
+        blend: Blend::Additive, max_particles: 54, duration: 0.1, looping: false, z: 171.0, ..
+    }, 1.8);
+}
+
+@system(in_state: [GameState::Playing])
+fn fly_fire_bolts(shots: (Entity, FireBolt, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
+    for (se, b, t) in shots {
+        b.vel = b.vel + vec2(0.0, b.gravity * time.dt);
+        let step = b.vel * time.dt;
+        let len = step.length();
+        let hit_wall = false;
+        if len > 0.0 {
+            hit_wall = physics.raycast_mask(t.position, step * (1.0 / len), len, WALL_BITS).hit;
+        }
+        if in_wall(physics, t.position) {
+            hit_wall = true;
+        }
+        b.life -= time.dt;
+        t.position = t.position + step;
+        let done = hit_wall || b.life <= 0.0;
+        if !done {
+            for (_, e, et) in enemies {
+                if !done && t.position.distance(et.position) <= enemy_reach(et) {
+                    damage_enemy(e, b.damage);
+                    done = true;
+                }
+            }
+        }
+        if done {
+            bolt_impact(cmd, t.position);
+            cmd.despawn(se);
+        }
+    }
+}
+
+fn min_int_of(a: int, b: int) -> int {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+@system(in_state: [GameState::Playing])
+fn shield(player: (Entity, Player, Transform)[], st: AbilityState, input: Input, time: Time, cmd: Commands) {
+    if !st.shield_on && st.shield_cd > 0.0 {
+        st.shield_cd -= time.dt;
+    }
+    for (pe, p, t) in player {
+        if !st.shield_on && st.shield_cd <= 0.0 && input.mouse_pressed(MouseButton::Right) {
+            p.shield = true;
+            st.shield_on = true;
+            st.shield_left = SHIELD_TIME;
+            st.shield_fx = cmd.spawn([
+                Transform { position: t.position, .. },
+                ParticleEmitter {
+                    rate: 180.0, lifetime_min: 1.62, lifetime_max: 3.24, prewarm: 1.0,
+                    speed_min: 2.0, speed_max: 12.0, drag: 1.2,
+                    size_start: 9.0, size_start_max: 13.0, size_end: 2.0,
+                    spin_min: -2.0, spin_max: 2.0,
+                    color_start: Color { r: 0.55, g: 0.95, b: 1.0, a: 0.9 },
+                    color_end: Color { r: 0.2, g: 0.5, b: 1.0, a: 0.0 },
+                    shape: EmitShape::Ring, shape_radius: SHIELD_RADIUS,
+                    local: true, blend: Blend::Additive, max_particles: 648, z: 210.0, ..
+                },
+            ]);
+            burst(cmd, t.position, 40, 260.0, 9.0,
+                  Color { r: 0.6, g: 0.95, b: 1.0, a: 1.0 }, Color { r: 0.2, g: 0.5, b: 1.0, a: 0.0 }, 0.5);
+        }
+        if st.shield_on {
+            cmd.insert(st.shield_fx, Transform { position: t.position, .. });
+            st.shield_left -= time.dt;
+            if !p.shield || st.shield_left <= 0.0 {
+                p.shield = false;
+                st.shield_on = false;
+                st.shield_cd = SHIELD_COOLDOWN;
+                cmd.despawn(st.shield_fx);
+                burst(cmd, t.position, 90, 420.0, 10.0,
+                      Color { r: 0.75, g: 1.0, b: 1.0, a: 1.0 }, Color { r: 0.2, g: 0.4, b: 1.0, a: 0.0 }, 0.7);
+            }
+        }
+    }
+}
+
+fn spawn_throw(cmd: Commands, from: Vec2, dir: Vec2, kind: string, level: int) {
+    let glow = col(0.6, 0.8, 1.0, 1.0);
+    let hot = col(0.95, 0.98, 1.0, 1.0);
+    let cool = col(0.35, 0.45, 1.0, 0.0);
+    if kind == "gas" {
+        glow = col(0.45, 1.0, 0.3, 1.0);
+        hot = col(0.7, 1.0, 0.4, 1.0);
+        cool = col(0.2, 0.55, 0.05, 0.0);
+    }
+    let vel = dir * 760.0 + vec2(0.0, -300.0);
+    let shot = cmd.spawn([
+        Transform { position: from, rotation: vel.angle(), scale: vec2(3.0, 3.0), .. },
+        Throw { kind: kind, vel: vel, level: level, .. },
+        PointLight { color: glow, intensity: 2.0, radius: 240.0, falloff: 1.5, shadows: false, .. },
+        ParticleEmitter {
+            rate: 150.0, lifetime_min: 0.27, lifetime_max: 0.9,
+            speed_min: 30.0, speed_max: 160.0, gravity: vec2(0.0, 600.0),
+            size_start: 6.0, size_start_max: 9.0, size_end: 0.5,
+            color_start: hot, color_end: cool,
+            shape: EmitShape::Circle, shape_radius: 8.0, spin_min: -6.0, spin_max: 6.0,
+            blend: Blend::Additive, max_particles: 216, z: 154.0, ..
+        },
+    ]);
+    if kind == "chain" {
+        cmd.insert(shot, Sprite { image: texture("assets/fx/chainBolt.png"), z: 155.0, .. });
+    } else {
+        cmd.insert(shot, Circle { radius: 4.0, color: hot, z: 155.0, .. });
+    }
+    burst(cmd, from, 18, 220.0, 7.0, hot, cool, 0.3);
+}
+
+@system(in_state: [GameState::Playing])
+fn fly_throws(throws: (Entity, Throw, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
+    for (te, th, t) in throws {
+        th.vel = th.vel + vec2(0.0, th.gravity * time.dt);
+        let step = th.vel * time.dt;
+        let len = step.length();
+        let hit_wall = false;
+        if len > 0.0 {
+            let ray = physics.raycast_mask(t.position, step * (1.0 / len), len, WALL_BITS);
+            if ray.hit {
+                hit_wall = true;
+                t.position = ray.point - step * (2.0 / len);
+            }
+        }
+        if !hit_wall && in_wall(physics, t.position) {
+            hit_wall = true;
+        }
+        if !hit_wall {
+            t.position = t.position + step;
+        }
+        th.life -= time.dt;
+        let hit = hit_wall || th.life <= 0.0;
+        if th.kind != "gas" {
+            for (_, _, et) in enemies {
+                if t.position.distance(et.position) <= enemy_reach(et) {
+                    hit = true;
+                }
+            }
+        }
+        if th.kind == "chain" {
+            t.rotation = th.vel.angle();
+        }
+        if hit {
+            if th.kind == "chain" {
+                zap(cmd, t.position);
+                chain_bolt(cmd, physics, t.position, enemies, 2 + th.level, 1);
+            }
+            if th.kind == "gas" {
+                flash(cmd, t.position, col(0.45, 1.0, 0.3, 1.0), 5.0, 600.0, 0.2);
+                burst(cmd, t.position, 140, 620.0, 14.0, col(0.75, 1.0, 0.45, 1.0), col(0.2, 0.5, 0.05, 0.0), 0.7);
+                burst(cmd, t.position, 50, 260.0, 30.0, col(0.5, 0.9, 0.3, 0.6), col(0.2, 0.45, 0.1, 0.0), 1.0);
+                spawn_gas(cmd, t.position, th.level);
+            }
+            cmd.despawn(te);
+        }
+    }
+}

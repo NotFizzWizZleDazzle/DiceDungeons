@@ -1,0 +1,12 @@
+import "drift.cdl" { * };
+
+@state enum GameState {
+    MainMenu,
+    Playing,
+    PickingUpgrade,
+    
+
+
+
+
+}
