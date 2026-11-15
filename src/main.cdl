@@ -6,6 +6,7 @@ import "torches.cdl" { * };
 import "menu.cdl" { * };
 import "player.cdl" { * };
 import "enemy.cdl" { * };
+import "enemy_ai.cdl" { * };
 import "card.cdl" { * };
 import "ability.cdl" { * };
 import "hud.cdl" { * };

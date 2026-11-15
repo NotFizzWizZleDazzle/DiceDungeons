@@ -2,20 +2,18 @@ import "drift" { * };
 import "game_state.cdl" { * };
 import "player.cdl" { * };
 import "dungeon.cdl" { * };
+import "enemy_ai.cdl" { * };
 
 // An enemy is a die: its health is the face it shows, so a d6 starts with up to six and a d4 with up to four.
+// A d6 fights up close with a lunge; a d4 keeps its distance and shoots. How they decide is in enemy_ai.cdl.
 @component
 struct Enemy {
     health: int = 6,
-    speed: float = 300.0,
     sides: int = 6,
-    sight: float = 600.0,
-    sees_player: bool = false,
+    speed: float = 300.0,
     attack_cooldown: float = 1.2,
-    cooldown_left: float = 0.0,
-    melee_range: float = 170.0,     // d6: centre to centre; the die reaches about 128 px
-    lunge_speed: float = 980.0,     // d6: the lunge's sideways and upward speed
-    shot_range: float = 1520.0,     // d4
+    melee_range: float = 190.0,     // d6: starts its lunge this close, centre to centre
+    lunge_speed: float = 980.0,     // d6: the fastest sideways speed of its lunge
     shot_speed: float = 420.0,      // d4: bolt speed, pixels per second
     hurt_time: float = 0.0,
     roll_time: float = 0.0,
@@ -83,6 +81,7 @@ fn spawn_enemy(cmd: Commands, assets: EnemyAssets, pos: Vec2, sides: int) -> Ent
     let health = sides - r.range(0, sides - 1);
     return cmd.spawn([
         Enemy { sides: sides, health: health, .. },
+        Brain { home_x: pos.x, goal_x: pos.x, think: r.range_float(0.0, 0.2), facing: r.sign(), .. },
         Transform { position: pos, scale: vec2(3.5, 3.5), .. },
         Sprite { image: faces_of(assets, sides)[health - 1], layer: 2, .. },
         RigidBody { .. },
@@ -125,8 +124,8 @@ fn damage_enemy(e: Enemy, amount: int) {
     e.roll_tick = ROLL_STEP;
 }
 
-// Takes one heart, or the shield; the last heart ends the run.
-fn hurt_player(cmd: Commands, p: Player, e: Entity, pv: Velocity, state: State<GameState>) {
+// Takes one heart, or the shield, and knocks the player away from `from`; the last heart ends the run.
+fn hurt_player(cmd: Commands, p: Player, e: Entity, pt: Transform, pv: Velocity, state: State<GameState>, from: Vec2) {
     if p.invuln > 0.0 {
         return;
     }
@@ -137,70 +136,14 @@ fn hurt_player(cmd: Commands, p: Player, e: Entity, pv: Velocity, state: State<G
     }
     p.invuln = PLAYER_IFRAMES;
     p.health = max_int(p.health - 1, 0);
-    pv.linear = vec2(pv.linear.x - 1500.0, -420.0);
+    let away = 1.0;
+    if pt.position.x < from.x {
+        away = -1.0;
+    }
+    pv.linear = vec2(pv.linear.x + away * 1500.0, -420.0);
     if p.health == 0 {
         state.set(GameState::MainMenu);
         cmd.despawn(e);
-    }
-}
-
-@system(in_state: [GameState::Playing])
-fn enemy_movement(enemies: (Enemy, Transform, Velocity)[], player: (Player, Transform)[], physics: Physics, time: Time) {
-    if player.len() == 0 {
-        return;
-    }
-    let target = vec2(0.0, 0.0);
-    for (_, pt) in player {
-        target = pt.position;
-    }
-    for (e, t, v) in enemies {
-        let to = target - t.position;
-        let dist = to.length();
-        e.sees_player = false;
-        if dist > 0.0 && dist <= e.sight {
-            e.sees_player = !physics.raycast_mask(t.position, to.normalized(), dist, WALL_BITS).hit;
-        }
-        let pace = e.speed;
-        if e.slow_time > 0.0 {
-            e.slow_time -= time.dt;
-            pace = e.speed * 0.35;
-        }
-        if e.sees_player {
-            v.linear = vec2(sign(to.x) * pace, v.linear.y);
-        } else {
-            v.linear = vec2(0.0, v.linear.y);
-        }
-    }
-}
-
-@system(in_state: [GameState::Playing], after: [enemy_movement])
-fn enemy_attack(enemies: (Enemy, Transform, Velocity)[], player: (Player, Transform, Velocity, Entity)[], time: Time, cmd: Commands, state: State<GameState>) {
-    for (e, t, v) in enemies {
-        if e.cooldown_left > 0.0 {
-            e.cooldown_left -= time.dt;
-        }
-        if !e.sees_player || e.cooldown_left > 0.0 {
-            continue;
-        }
-        for (p, pt, pv, pe) in player {
-            let to = pt.position - t.position;
-            let dist = to.length();
-            // A d4 shoots from afar.
-            if e.sides == 4 && dist <= e.shot_range {
-                e.cooldown_left = e.attack_cooldown;
-                spawn_bolt(cmd, t.position, to.normalized(), e.shot_speed);
-            }
-            // A d6 lunges: a hop at the player, so the attack reads on screen.
-            if e.sides == 6 && dist <= e.melee_range {
-                e.cooldown_left = e.attack_cooldown;
-                let side = 1.0;
-                if to.x < 0.0 {
-                    side = -1.0;
-                }
-                v.linear = vec2(side * e.lunge_speed, -e.lunge_speed);
-                hurt_player(cmd, p, pe, pv, state);
-            }
-        }
     }
 }
 
@@ -230,7 +173,7 @@ fn bolts(shots: (Entity, Bolt, Transform)[], player: (Player, Transform, Velocit
         t.position = t.position + b.dir * step;
         for (p, pt, pv, pe) in player {
             if !done && t.position.distance(pt.position) <= PLAYER_HIT_RADIUS {
-                hurt_player(cmd, p, pe, pv, state);
+                hurt_player(cmd, p, pe, pt, pv, state, t.position);
                 done = true;
             }
         }
