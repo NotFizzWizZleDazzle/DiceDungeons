@@ -584,7 +584,7 @@ fn enemy_steer(
                         vx = vx * 0.25;
                     }
                 }
-                if b.grounded {
+                if b.grounded && b.jump_cd <= 0.0 {
                     b.blocked = false;
                     let step_y = pos.y + half * 0.4;
                     let wall = physics.raycast_mask(vec2(pos.x, step_y), vec2(dir, 0.0), half + 45.0, WALL_BITS);
@@ -592,8 +592,11 @@ fn enemy_steer(
                         let over = wall.point.x + dir * 14.0;
                         let top = physics.raycast_mask(vec2(over, pos.y - MAX_JUMP - half), vec2(0.0, 1.0), MAX_JUMP + half * 2.0, WALL_BITS);
                         let rise = pos.y + half - top.point.y;
-                        if top.hit && top.fraction > 0.01 && rise <= MAX_JUMP {
+                        // Something overhead, such as a wide crate on a narrow one, would stop the jump.
+                        let headroom = !physics.raycast_mask(pos, vec2(0.0, -1.0), rise + 20.0, WALL_BITS).hit;
+                        if top.hit && top.fraction > 0.01 && rise <= MAX_JUMP && headroom {
                             v.linear = vec2(vx, -jump_speed(rise + 40.0));
+                            b.jump_cd = 0.4;
                         } else {
                             b.blocked = true;
                             vx = 0.0;
