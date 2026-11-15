@@ -1,14 +1,11 @@
 import "drift" { * };
-import "./game_state.cdl" { * };
-import "./torches.cdl" { * };
-import "./enemy.cdl" { * };
-
-const r: Rng = rng(76);
+import "game_state.cdl" { * };
+import "torches.cdl" { * };
+import "enemy.cdl" { * };
 
 @settings(section: "dungeon")
 struct DungeonSettings {
     tiles: string[] = ["assets/creamTile.png", "assets/brownTile.png"],
-    variant_chance: float = 0.3,
     mortar: int = 1,
     stagger: bool = true,
     scale: float = 2.0,
@@ -83,7 +80,6 @@ fn wall_shade(c: Color, k: float) -> Color {
 fn brick_wall(assets: Assets, w: int, h: int, s: DungeonSettings, seed: int) -> Image {
     let bricks: Image[] = [];
     for path in s.tiles {
-
         bricks.push(assets.image(path));
     }
     let bw = bricks[0].width();
@@ -95,8 +91,7 @@ fn brick_wall(assets: Assets, w: int, h: int, s: DungeonSettings, seed: int) -> 
     for row in range(h / ch + 1) {
         let shift = if s.stagger { (row % 2) * (cw / 2) } else { 0 };
         for col in range(w / cw + 2) {
-            // let pick = if bricks.len() > 1 && r.chance(s.variant_chance) { 1 + r.range(0, bricks.len() - 2) } else { 0 };
-            let pick = r.range(0, 1);
+            let pick = r.range(0, bricks.len() - 1);
             img.draw(bricks[pick], col * cw - shift, row * ch);
         }
     }
@@ -188,51 +183,59 @@ fn block(cmd: Commands, index: int, x: float, y: float, w: float, h: float, scal
 
 fn spawn_chunk(art: TorchAsset, cmd: Commands, st: DungeonState, s: DungeonSettings, ts: TorchSettings, crates: CrateAssets, foes: EnemyAssets, index: int) {
     let k = s.scale;
-    let cw = st.chunk_w;
-    let x0 = index * cw;
-    let fcw = float(cw);
-    let fh = float(st.h);
-    let cx = (float(x0) + fcw * 0.5) * k;
-    let tint = Color { r: s.wall_shade, g: s.wall_shade, b: s.wall_shade, a: 1.0 };
-    let pick = ((index % st.walls.len()) + st.walls.len()) % st.walls.len();
+    let x0 = float(index * st.chunk_w);
+    let width = float(st.chunk_w);
+    let height = float(st.h);
+    let shade = Color { r: s.wall_shade, g: s.wall_shade, b: s.wall_shade, a: 1.0 };
+    let wall = ((index % st.walls.len()) + st.walls.len()) % st.walls.len();
+    cmd.spawn([
+        Transform { position: vec2((x0 + width * 0.5) * k, height * k * 0.5), scale: vec2(k, k), .. },
+        Sprite { image: st.walls[wall], color: shade, z: -10.0, .. },
+        Chunk { index: index },
+    ]);
 
-    cmd.spawn([Transform { position: vec2(cx, fh * k * 0.5), scale: vec2(k, k), .. },
-               Sprite { image: st.walls[pick], color: tint, z: -10.0, .. },
-               Chunk { index: index }]);
-
-    let ground_h = fh - st.floor_top;
-    let gw = float(st.ground_w);
-    let tiles = int(fcw / gw) + 1;
-    for i in range(tiles) {
-        let gx = float(x0) + gw * (float(i) + 0.5);
-        cmd.spawn([Transform { position: vec2(gx * k, (st.floor_top + ground_h * 0.5) * k), scale: vec2(k, k), .. },
-                   Sprite { image: st.ground, z: -5.0, .. },
-                   Chunk { index: index }]);
+    let ground_h = height - st.floor_top;
+    let tile_w = float(st.ground_w);
+    for i in range(int(width / tile_w) + 1) {
+        let gx = x0 + tile_w * (float(i) + 0.5);
+        cmd.spawn([
+            Transform { position: vec2(gx * k, (st.floor_top + ground_h * 0.5) * k), scale: vec2(k, k), .. },
+            Sprite { image: st.ground, z: -5.0, .. },
+            Chunk { index: index },
+        ]);
     }
 
-
-    block(cmd, index, float(x0), 0.0, fcw, s.ceiling, k);
-    block(cmd, index, float(x0), st.floor_top, fcw, ground_h, k);
+    block(cmd, index, x0, 0.0, width, s.ceiling, k);
+    block(cmd, index, x0, st.floor_top, width, ground_h, k);
 
     let n = s.torches_per_chunk;
-    let y = (s.ceiling + (st.floor_top - s.ceiling) * s.torch_height) * k;
+    let torch_y = (s.ceiling + (st.floor_top - s.ceiling) * s.torch_height) * k;
     for i in range(n) {
-        let x = (float(x0) + fcw * (float(i) + 0.5) / float(n)) * k;
-        let t = torch(cmd, vec2(x, y), ts, art, s.seed + index * 31 + i);
+        let x = (x0 + width * (float(i) + 0.5) / float(n)) * k;
+        let t = torch(cmd, vec2(x, torch_y), ts, art);
         cmd.insert(t, Chunk { index: index });
     }
 
+    // Crates and enemies share one random sequence per chunk, so a chunk comes back the same.
     let r = rng(s.seed + index * 7349 + 17);
     let floor_y = st.floor_top * k;
-    let left = float(x0) * k;
-    let span = fcw * k;
-    let cx: float[] = [];
-    let chw: float[] = [];
-    let ctop: float[] = [];
-    let clevel: int[] = [];
-    let ceiling_y = s.ceiling * k;
+    let left = x0 * k;
+    let span = width * k;
+    if index >= s.safe_chunks {
+        spawn_crates(cmd, crates, s, r, index, left, span, floor_y);
+        spawn_chunk_enemies(cmd, foes, s, r, index, left, span, floor_y);
+    }
+}
+
+// Up to max_crates crates on the floor, some stacked on others.
+fn spawn_crates(cmd: Commands, crates: CrateAssets, s: DungeonSettings, r: Rng, index: int, left: float, span: float, floor_y: float) {
+    let ceiling_y = s.ceiling * s.scale;
+    let xs: float[] = [];
+    let half_ws: float[] = [];
+    let tops: float[] = [];
+    let levels: int[] = [];
     for i in range(s.max_crates) {
-        if index >= s.safe_chunks && r.chance(s.crate_chance) {
+        if r.chance(s.crate_chance) {
             let img = crates.square;
             if r.chance(0.35) {
                 img = crates.wide;
@@ -241,28 +244,24 @@ fn spawn_chunk(art: TorchAsset, cmd: Commands, st: DungeonState, s: DungeonSetti
             let hw = size.x * s.crate_scale * 0.5;
             let hh = size.y * s.crate_scale * 0.5;
             let x = left + span * r.range_float(0.1, 0.9);
-            if cx.len() > 0 && r.chance(s.crate_stack_chance) {
-                let j = r.range(0, cx.len() - 1);
-                x = cx[j] + chw[j] * r.range_float(-0.4, 0.4);
+            if xs.len() > 0 && r.chance(s.crate_stack_chance) {
+                let j = r.range(0, xs.len() - 1);
+                x = xs[j] + half_ws[j] * r.range_float(-0.4, 0.4);
             }
             let base = floor_y;
             let level = 1;
-            for j in range(cx.len()) {
-                let dx = x - cx[j];
-                if dx < 0.0 {
-                    dx = 0.0 - dx;
-                }
-                if dx < hw + chw[j] && ctop[j] < base {
-                    base = ctop[j];
-                    level = clevel[j] + 1;
+            for j in range(xs.len()) {
+                if (x - xs[j]).abs() < hw + half_ws[j] && tops[j] < base {
+                    base = tops[j];
+                    level = levels[j] + 1;
                 }
             }
             let y = base - hh - 1.0;
             if level <= s.max_stack && y - hh > ceiling_y + 20.0 {
-                cx.push(x);
-                chw.push(hw);
-                ctop.push(y - hh);
-                clevel.push(level);
+                xs.push(x);
+                half_ws.push(hw);
+                tops.push(y - hh);
+                levels.push(level);
                 cmd.spawn([
                     Transform { position: vec2(x, y), scale: vec2(s.crate_scale, s.crate_scale), .. },
                     Sprite { image: img, z: 50.0, .. },
@@ -275,25 +274,9 @@ fn spawn_chunk(art: TorchAsset, cmd: Commands, st: DungeonState, s: DungeonSetti
             }
         }
     }
-    if index >= s.safe_chunks {
-        let far = index - s.safe_chunks;
-        let tries = s.max_enemies + far / max_int(s.enemy_ramp, 1);
-        let chance = min(s.enemy_chance + s.enemy_chance_step * float(far), 0.95);
-        for i in range(tries) {
-            if r.chance(chance) {
-                let sides = 6;
-                if r.chance(s.d4_chance) {
-                    sides = 4;
-                }
-                let x = left + span * r.range_float(0.15, 0.85);
-                let e = spawn_enemy(cmd, foes, vec2(x, floor_y - 120.0), sides);
-                cmd.insert(e, Chunk { index: index });
-            }
-        }
-    }
 }
 
-fn start_dungeon(assets: Assets, window: Window, s: DungeonSettings, st: DungeonState) -> Rect {
+fn start_dungeon(assets: Assets, window: Window, s: DungeonSettings, st: DungeonState) {
     let k = s.scale;
     let cw = assets.image(s.tiles[0]).width() + s.mortar;
     let w = int(window.width / k + 0.999);
@@ -314,7 +297,6 @@ fn start_dungeon(assets: Assets, window: Window, s: DungeonSettings, st: Dungeon
     st.ground_w = s.ground_tile;
     st.ground = pebble_floor(assets, s.ground_tile, int(float(h) - st.floor_top), s, s.seed + 2).to_texture();
     st.ready = true;
-    return Rect { x: 0.0, y: s.ceiling * k, w: float(w) * k, h: (st.floor_top - s.ceiling) * k };
 }
 
 fn chunk_at(st: DungeonState, s: DungeonSettings, world_x: float) -> int {

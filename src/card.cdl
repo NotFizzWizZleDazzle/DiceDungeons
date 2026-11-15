@@ -10,7 +10,6 @@ struct CardSettings {
     hand: int = 3,
     drop_chance: float = 0.08,
     card_at: int[] = [3, 5, 10],
-    then_every: int = 10,
     pickup_radius: float = 150.0,
     pickup_life: float = 20.0,
     rare_chance: float = 0.02,
@@ -49,7 +48,6 @@ struct UpgradeProgress {
 struct CardDrop {
     base_y: float = 0.0,
     age: float = 0.0,
-    part: Entity = Entity { .. },
 }
 
 @component
@@ -60,13 +58,14 @@ struct Card {
 @component
 struct CardPart {}
 
-fn spawn_card(cmd: Commands, art: CardAsset, ability: int, pos: Vec2, scale: float) -> Entity {
-    let card = cmd.spawn([
+// A card is three layers: the middle, the frame and the ability's picture.
+fn spawn_card(cmd: Commands, art: CardAsset, ability: int, pos: Vec2, scale: float) {
+    cmd.spawn([
         Transform { position: pos, scale: vec2(scale, scale), .. },
         Sprite { image: art.middle, z: 1.0, layer: hud_layer(), .. },
         Card { ability: ability },
     ]);
-    let card = cmd.spawn([
+    cmd.spawn([
         Transform { position: pos, scale: vec2(scale, scale), .. },
         Sprite { image: art.bg.to_image().crop(Rect { x: 24, y: 2, w: 55, h: 92 }).to_texture(), z: 0.5, layer: hud_layer(), .. },
         Card { ability: ability },
@@ -76,46 +75,33 @@ fn spawn_card(cmd: Commands, art: CardAsset, ability: int, pos: Vec2, scale: flo
         Sprite { image: art.abilities[ability], z: 2.0, layer: hud_layer(), .. },
         CardPart {},
     ]);
-    return card;
 }
 
 @system(on_exit: GameState::MainMenu)
-fn reset_upgrades(sets: CardSettings, progress: UpgradeProgress, owned: Abilities, kills: Kills) {
+fn reset_upgrades(progress: UpgradeProgress, owned: Abilities, kills: Kills) {
     kills.count = 0;
     kills.deaths = [];
     progress.rolls = 0;
     owned.owned = [];
 }
 
+// After the kill counts in card_at, and after these, a card always drops.
+const CARD_KILLS: int[] = [3, 8, 12, 16, 20, 24];
+
 fn card_due(sets: CardSettings, kill: int) -> bool {
-    let killC = [3, 5+3, 7+5, 9+7, 11+9, 13+11];
-    if sets.card_at.contains(kill) {
-        return true;
-    }
-    let last = 0;
-    for k in sets.card_at {
-        if k > last {
-            last = k;
-        }
-    }
-    // return true;
-    return killC.contains(kill);
+    return sets.card_at.contains(kill) || CARD_KILLS.contains(kill);
 }
 
 @system(in_state: [GameState::Playing])
-fn card_drops(kills: Kills, sets: CardSettings, progress: UpgradeProgress, art: CardAsset, random: Random, cmd: Commands, time: Time) {
+fn card_drops(kills: Kills, sets: CardSettings, progress: UpgradeProgress, art: CardAsset, cmd: Commands) {
     for pos in kills.deaths {
         progress.rolls += 1;
         let r = rng(progress.rolls * 7919);
-        let due = card_due(sets, progress.rolls);
-        if due || r.chance(sets.drop_chance) {
-            let front = cmd.spawn([
-                Transform { position: pos, .. },
-            ]);
+        if card_due(sets, progress.rolls) || r.chance(sets.drop_chance) {
             cmd.spawn([
                 Transform { position: pos, scale: vec2(1.2, 1.2), .. },
                 Sprite { image: art.middle, z: 120.0, .. },
-                CardDrop { base_y: pos.y, part: front, .. },
+                CardDrop { base_y: pos.y, .. },
                 ParticleEmitter {
                     rate: 25.0, lifetime_min: 0.5, lifetime_max: 1.2,
                     speed_min: 10.0, speed_max: 45.0, angle_min: -2.6, angle_max: -0.54,
@@ -133,7 +119,7 @@ fn card_drops(kills: Kills, sets: CardSettings, progress: UpgradeProgress, art: 
 
 @system(in_state: [GameState::Playing])
 fn card_pickups(drops: (Entity, CardDrop, Transform)[], player: (Player, Transform)[], sets: CardSettings, time: Time, state: State<GameState>, cmd: Commands) {
-    for (de, d, t) in drops {
+    for (e, d, t) in drops {
         d.age += time.dt;
         t.position = vec2(t.position.x, d.base_y - 30.0 - 12.0 * sin(d.age * 3.0));
         let taken = false;
@@ -142,22 +128,18 @@ fn card_pickups(drops: (Entity, CardDrop, Transform)[], player: (Player, Transfo
                 taken = true;
             }
         }
-        cmd.insert(d.part, Transform { position: t.position, scale: t.scale, .. });
         if taken {
-            cmd.despawn(d.part);
-            cmd.despawn(de);
+            cmd.despawn(e);
             state.set(GameState::PickingUpgrade);
         } else if d.age >= sets.pickup_life {
-            cmd.despawn(d.part);
-            cmd.despawn(de);
+            cmd.despawn(e);
         }
     }
 }
 
 @system(on_exit: GameState::MainMenu)
 fn clear_card_drops(drops: (Entity, CardDrop)[], cmd: Commands) {
-    for (e, d) in drops {
-        cmd.despawn(d.part);
+    for (e, _) in drops {
         cmd.despawn(e);
     }
 }
@@ -174,10 +156,7 @@ fn deal_cards(art: CardAsset, sets: CardSettings, owned: Abilities, window: Wind
             common.push(i);
         }
     }
-    let n = sets.hand;
-    if n > common.len() + rare.len() {
-        n = common.len() + rare.len();
-    }
+    let n = min_int(sets.hand, common.len() + rare.len());
     let left = window.width * 0.5 - sets.spacing * float(n - 1) * 0.5;
     for i in range(n) {
         let rare_ok = owned.owned.len() >= sets.rare_after;
@@ -199,13 +178,8 @@ fn deal_cards(art: CardAsset, sets: CardSettings, owned: Abilities, window: Wind
 @system(in_state: [GameState::PickingUpgrade])
 fn pick_card(cards: (Card, Sprite, Transform)[], art: CardAsset, owned: Abilities, input: Input, state: State<GameState>) {
     let m = input.mouse_screen();
-    let size = art.middle.size();
     for (c, sprite, t) in cards {
-        let hw = size.x * t.scale.x * 0.5;
-        let hh = size.y * t.scale.y * 0.5;
-        let over = m.x >= t.position.x - hw && m.x <= t.position.x + hw
-                && m.y >= t.position.y - hh && m.y <= t.position.y + hh;
-        if over {
+        if mouse_over(m, art.middle.size(), t) {
             sprite.color = Color { r: 1.0, g: 0.9, b: 0.55, a: 1.0 };
             if input.mouse_pressed(MouseButton::Left) {
                 owned.owned.push(art.names[c.ability]);

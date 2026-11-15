@@ -1,7 +1,6 @@
 import "drift" { * };
 import "game_state.cdl" { * };
 import "player.cdl" { * };
-import "enemy.cdl" { * };
 
 const HUD_X: float = 40.0;
 const HUD_Y: float = 44.0;
@@ -95,12 +94,11 @@ fn update_hud(players: (Entity, Player)[], dots: (Entity, HealthDot, Sprite)[], 
     }
 
     let lit = int(float(CELLS) * float(mana) / float(max_mana) + 0.5);
-    for (c, r) in cells {
+    for (c, cell) in cells {
         if c.index < lit {
-            r.color = Color { r: 0.25, g: 0.5, b: 1.0, a: 1.0 };
+            cell.color = Color { r: 0.25, g: 0.5, b: 1.0, a: 1.0 };
         } else {
-            r.color = Color { r: 0.12, g: 0.14, b: 0.22, a: 1.0 };
+            cell.color = Color { r: 0.12, g: 0.14, b: 0.22, a: 1.0 };
         }
     }
-    
 }

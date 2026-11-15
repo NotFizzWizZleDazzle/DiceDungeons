@@ -1,7 +1,5 @@
 import "drift" { * };
-
 import "game_state.cdl" { * };
-
 import "torches.cdl" { * };
 
 @resource
@@ -15,53 +13,27 @@ struct UIArt {
 @component struct StartButton {}
 
 @system(on_enter: GameState::MainMenu)
-fn spawn_menu(cmd: Commands, assets: Assets, window: Window, art: UIArt, s: TorchSettings, art2: TorchAsset){
+fn spawn_menu(cmd: Commands, window: Window, art: UIArt, torches: TorchSettings, torch_art: TorchAsset) {
     cmd.spawn([
-        Transform { 
-            position: vec2(window.width/2, window.height/4), 
-            scale: vec2(6.0, 6.0), 
-            .. 
-        },
-        Sprite {
-            image: art.title,
-            layer: hud_layer(),
-            ..
-        },
+        Transform { position: vec2(window.width * 0.5, window.height * 0.25), scale: vec2(6.0, 6.0), .. },
+        Sprite { image: art.title, layer: hud_layer(), .. },
         MainMenuUI {},
     ]);
-    
     cmd.spawn([
-        Transform { 
-            position: vec2(window.width/2, window.height/2*1.1), 
-            scale: vec2(4.0, 4.0), 
-            .. 
-        },
-        Sprite {
-            image: art.start,
-            layer: hud_layer(),
-            ..
-        },
-
+        Transform { position: vec2(window.width * 0.5, window.height * 0.55), scale: vec2(4.0, 4.0), .. },
+        Sprite { image: art.start, layer: hud_layer(), .. },
         MainMenuUI {},
-
         StartButton {},
     ]);
-    let t = torch(cmd, vec2(window.width / 3 * 2, window.height * 1.7 / 3), s, art2, 56);
-    // cmd.insert(t, MainMenuUI{});
-    t = torch(cmd, vec2(window.width / 3, window.height * 1.7/ 3), s, art2, 56);
-    // cmd.insert(t, MainMenuUI{});
+    torch(cmd, vec2(window.width / 3.0 * 2.0, window.height * 1.7 / 3.0), torches, torch_art);
+    torch(cmd, vec2(window.width / 3.0, window.height * 1.7 / 3.0), torches, torch_art);
 }
 
 @system(in_state: [GameState::MainMenu])
 fn start_button(buttons: (StartButton, Sprite, Transform)[], input: Input, state: State<GameState>) {
     let m = input.mouse_screen();
     for (_, sprite, t) in buttons {
-        let size = sprite.image.size();
-        let hw = size.x * t.scale.x * 0.5;
-        let hh = size.y * t.scale.y * 0.5;
-        let over = m.x >= t.position.x - hw && m.x <= t.position.x + hw
-                && m.y >= t.position.y - hh && m.y <= t.position.y + hh;
-        if over {
+        if mouse_over(m, sprite.image.size(), t) {
             sprite.color = Color { r: 1.0, g: 0.85, b: 0.6, a: 1.0 };
             if input.mouse_pressed(MouseButton::Left) {
                 state.set(GameState::Playing);

@@ -1,8 +1,7 @@
 import "drift" { * };
 import "game_state.cdl" { * };
 
-
-
+// The player is a ball with three coloured prongs welded on; it rolls on the ground and is pushed in the air.
 @component
 struct Player {
     health: int = 3,
@@ -16,9 +15,8 @@ struct Player {
     stuck_time: float = 0.0,
 }
 
-
-@component 
-// TS for subsprites
+// One of the three prongs, each its own body.
+@component
 struct PlayerCollider { i: int }
 
 @resource
@@ -28,34 +26,29 @@ struct PlayerAsset {
         texture("assets/topSprites/greenTop.png"),
         texture("assets/topSprites/redTop.png"),
     ],
-    center: Texture = texture("assets/topSprites/whiteCircle.png")
+    center: Texture = texture("assets/topSprites/whiteCircle.png"),
 }
 
-
-const PLAYER_BITS: int = 2;
-const PLAYER_MASK: int = 65535 - 2;
-
-const JUMP_SPIN: float = 180.0;
-
+const PLAYER_MASK: int = 65535 - PLAYER_BITS;
 const SIZE_MULT: float = 0.85;
-
+const SPIN: float = 7.0;
+const JUMP_SPEED: float = 1120.0;
+const MAX_SLIDE: float = 600.0;
+const AIR_PUSH: float = 5e6;
 
 fn create_player(cmd: Commands, assets: PlayerAsset) -> Entity {
     let pos = vec2(500.0, 250.0);
-
-
     let player = cmd.spawn([
         Player { health: assets.tops.len(), max_health: assets.tops.len(), .. },
         RigidBody { .. },
         Transform { position: pos, scale: vec2(0.5 * SIZE_MULT, 0.5 * SIZE_MULT), .. },
         Velocity { .. },
- 
-        CircleCollider { radius: 40.0 * SIZE_MULT, density: 10.0, category: PLAYER_BITS, mask: PLAYER_MASK, friction: 1, .. },
+        CircleCollider { radius: 40.0 * SIZE_MULT, density: 10.0, category: PLAYER_BITS, mask: PLAYER_MASK, friction: 1.0, .. },
     ]);
     let reach = 64.0 * SIZE_MULT;
     for i in range(3) {
         let a = float(i) * TAU / 3.0;
-        let out = vec2(sin(a), 0.0 - cos(a));
+        let out = vec2(sin(a), -cos(a));
         cmd.spawn([
             Sprite { image: assets.tops[i], z: 200.0, pivot: vec2(0.5, 0.5), .. },
             Transform { position: pos + out * reach, scale: vec2(4.0 * SIZE_MULT, 4.0 * SIZE_MULT), rotation: a, .. },
@@ -66,76 +59,54 @@ fn create_player(cmd: Commands, assets: PlayerAsset) -> Entity {
             BoxCollider { friction: 1.0, category: PLAYER_BITS, mask: PLAYER_MASK, half_size: vec2(17.0 * SIZE_MULT, 51.0 * SIZE_MULT), .. },
         ]);
     }
-
     cmd.spawn_child(player, [
         Transform { position: vec2(0.0, 0.0), scale: vec2(7.5 * SIZE_MULT, 7.5 * SIZE_MULT), .. },
-        Sprite { image: assets.center, z: 100.0, color: Color { r: 0, g: 0, b: 0, a: 1 }, .. },
+        Sprite { image: assets.center, z: 100.0, color: Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }, .. },
     ]);
-
     return player;
 }
 
 @system(in_state: [GameState::Playing])
-fn movement(player: (Player, Velocity, Transform)[], parts: (PlayerCollider, Velocity, Entity, Transform)[], input: Input, physics: Physics, time: Time, cmd: Commands) {
+fn movement(player: (Player, Velocity, Transform)[], parts: (PlayerCollider, Entity)[], input: Input, physics: Physics, time: Time) {
     for (d, v, t) in player {
-        let was_on_ground = d.on_ground;
-        let down = physics.raycast_mask(t.position + vec2(0.0, 64.0), vec2(0.0, 1.0), 90.0, 1);
-        d.on_ground = down.hit;
+        d.on_ground = physics.raycast_mask(t.position + vec2(0.0, 64.0), vec2(0.0, 1.0), 90.0, WALL_BITS).hit;
 
-
-
-        let dtheta = 0.0;
-        
+        let spin = 0.0;
         if input.key_down(Key::A) {
-            dtheta -= 7.0 * d.speed;
+            spin -= SPIN * d.speed;
         }
         if input.key_down(Key::D) {
-            dtheta += 7.0 * d.speed;
+            spin += SPIN * d.speed;
         }
         let y = v.linear.y;
         if d.on_ground && input.key_pressed(Key::W) {
-            y = -1120.0;
-            
+            y = -JUMP_SPEED;
         }
-        
-        let f = 0.0;
-        if (d.on_ground) {
-            if dtheta != 0.0 {
-                v.angular = dtheta;
+        // On the ground the ball rolls; in the air the prongs are pushed sideways.
+        let push = 0.0;
+        if d.on_ground {
+            if spin != 0.0 {
+                v.angular = spin;
             }
+        } else {
+            push = spin / 2.0;
         }
-        else {
-            f = dtheta / 2;
-        }
-        v.linear = vec2(v.linear.x, y);
-        v.linear.x = max(-600, min(600, v.linear.x));
+        v.linear = vec2(clamp(v.linear.x, -MAX_SLIDE, MAX_SLIDE), y);
 
-        let spin = v.angular;
-        if spin < 0.0 {
-            spin = 0.0 - spin;
-        }
-        let slide = v.linear.x;
-        if slide < 0.0 {
-            slide = 0.0 - slide;
-        }
-        if dtheta != 0.0 && spin < 1.0 && slide < 30.0 {
+        // Rolling into a wall without moving for a moment hops the ball over it.
+        if spin != 0.0 && v.angular.abs() < 1.0 && v.linear.x.abs() < 30.0 {
             d.stuck_time += time.dt;
         } else {
             d.stuck_time = 0.0;
         }
         if d.stuck_time > 0.35 {
             d.stuck_time = 0.0;
-            let side = 1.0;
-            if dtheta < 0.0 {
-                side = -1.0;
-            }
-            v.linear = vec2(v.linear.x + side * 250.0, -650.0);
-            v.angular = dtheta;
+            v.linear = vec2(v.linear.x + sign(spin) * 250.0, -650.0);
+            v.angular = spin;
         }
 
-        for (_, pv, e, lt) in parts {
-            physics.apply_force(e, vec2(f * 5e6, 0.0));
-            // physics.apply_torque(e, t * 1e15);
+        for (_, e) in parts {
+            physics.apply_force(e, vec2(push * AIR_PUSH, 0.0));
         }
     }
 }
@@ -154,10 +125,11 @@ fn start_run(old: (Entity, Player)[], old_parts: (Entity, PlayerCollider)[], cam
     }
 }
 
+// The prongs blink while the player cannot be hurt.
 @system(in_state: [GameState::Playing])
-fn player_iframes(player: (Entity, Player)[], parts: (PlayerCollider, Sprite, Entity)[], cmd: Commands, time: Time) {
+fn player_iframes(player: (Entity, Player)[], parts: (PlayerCollider, Sprite)[], time: Time) {
     let alpha = 1.0;
-    for (e, p) in player {
+    for (_, p) in player {
         if p.invuln > 0.0 {
             p.invuln -= time.dt;
             if int(p.invuln * 12.0) % 2 == 0 {
@@ -165,7 +137,7 @@ fn player_iframes(player: (Entity, Player)[], parts: (PlayerCollider, Sprite, En
             }
         }
     }
-    for (_, sprite, _) in parts {
+    for (_, sprite) in parts {
         sprite.color = Color { r: sprite.color.r, g: sprite.color.g, b: sprite.color.b, a: alpha };
     }
 }

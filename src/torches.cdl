@@ -1,5 +1,4 @@
 import "drift" { * };
-import "std/math" as math;
 
 @settings(section: "torches")
 struct TorchSettings {
@@ -8,11 +7,6 @@ struct TorchSettings {
     radius: float = 360.0,
     intensity: float = 3.4,
     falloff: float = 1.4,
-    flicker: float = 0.2,
-    flicker_speed: float = 1.0,
-    flame_color: Color = Color { r: 1.0, g: 0.72, b: 0.3, a: 1.0 },
-    flame_size: float = 7.0,
-    stick_color: Color = Color { r: 0.28, g: 0.18, b: 0.1, a: 1.0 },
     embers: bool = true,
     shadows: bool = false,
     glow: bool = true,
@@ -24,52 +18,34 @@ struct TorchSettings {
     shimmer_height: float = 140.0,
     tint: Color = Color { r: 1.0, g: 0.9, b: 0.75, a: 0.3 },
     sprite: string = "assets/torch.png",
-}//comment test
-//yay
-//why is comment double forward slash
+}
 
 @resource
 struct TorchAsset {
     sprite: Texture = Texture { .. },
 }
+
 @resource
-struct TorchGlow { material: Material = Material { .. }, on: bool = false }
-
-@component
-struct Torch { phase: float = 0.0, radius: float = 360.0, intensity: float = 1.4 }
-
-@component
-struct TorchFlame { phase: float = 0.0, size: float = 7.0 }
-
-fn flicker(t: float, phase: float, speed: float) -> float {
-    let a = math::sin(t * 11.0 * speed + phase);
-    let b = math::sin(t * 23.0 * speed + phase * 1.7);
-    let c = math::sin(t * 5.3 * speed + phase * 0.6);
-    return (a * 0.45 + b * 0.25 + c * 0.3);
+struct TorchGlow {
+    material: Material = Material { .. },
+    on: bool = false,
 }
 
-fn torch(cmd: Commands, pos: Vec2, s: TorchSettings, art: TorchAsset, seed: int) -> Entity {
-    let r = rng(seed);
-    let phase = r.range_float(0.0, TAU);
+@component
+struct Torch {}
+
+// The glow shader takes this many torch positions.
+const GLOW_SLOTS: int = 6;
+
+fn torch(cmd: Commands, pos: Vec2, s: TorchSettings, art: TorchAsset) -> Entity {
     let t = cmd.spawn([
         at(pos.x, pos.y),
-        Torch { phase: phase, radius: s.radius, intensity: s.intensity },
+        Torch {},
         PointLight { color: s.light_color, intensity: s.intensity, radius: s.radius, falloff: s.falloff, shadows: s.shadows, .. },
     ]);
     cmd.spawn_child(t, [
         Transform { position: vec2(0.0, -1.0), scale: vec2(2.5, 2.5), .. },
-        Sprite{
-            image: art.sprite,
-            ..
-        }
-    ]);
-    cmd.spawn_child(t, [
-        Transform { position: vec2(0.0, -1.0), scale: vec2(2.5, 2.5), .. },
-        TorchFlame { phase: phase, size: s.flame_size },
-    ]);
-    cmd.spawn_child(t, [
-        at(0.0, -2.0),
-        TorchFlame { phase: phase + 1.3, size: s.flame_size * 0.45 },
+        Sprite { image: art.sprite, .. },
     ]);
     if s.embers {
         cmd.spawn_child(t, [
@@ -103,6 +79,7 @@ fn torch_ambient(effects: Effects, assets: Assets, s: TorchSettings, glow: Torch
     }
 }
 
+// Hands the screen positions of the first torches in view to the glow shader.
 @system
 fn torch_glow(torches: (Torch, Transform)[], cameras: (Camera, Transform)[], glow: TorchGlow, window: Window, s: TorchSettings) {
     if !glow.on {
@@ -112,17 +89,17 @@ fn torch_glow(torches: (Torch, Transform)[], cameras: (Camera, Transform)[], glo
     for (_, c) in cameras {
         origin = c.position - vec2(window.width * 0.5, window.height * 0.5);
     }
-    let i = 0;
+    let slot = 0;
     for (_, t) in torches {
         let p = t.position - origin;
         let on_screen = p.x > -s.radius && p.x < window.width + s.radius && p.y > -s.radius && p.y < window.height + s.radius;
-        if i < 6 && on_screen {
-            glow.material.set_param(2 + i, p.x / window.width, p.y / window.height, s.shimmer_height / window.height, 1.0);
-            i += 1;
+        if slot < GLOW_SLOTS && on_screen {
+            glow.material.set_param(2 + slot, p.x / window.width, p.y / window.height, s.shimmer_height / window.height, 1.0);
+            slot += 1;
         }
     }
-    while i < 6 {
-        glow.material.set_param(2 + i, 0.0, 0.0, 0.0, 0.0);
-        i += 1;
+    while slot < GLOW_SLOTS {
+        glow.material.set_param(2 + slot, 0.0, 0.0, 0.0, 0.0);
+        slot += 1;
     }
 }

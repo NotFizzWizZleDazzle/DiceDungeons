@@ -1,111 +1,34 @@
 import "drift" { * };
 import "drift/debug" { * };
-import "std/random";
-import "dungeon.cdl" { * };
-import "card.cdl" { * };
-import "torches.cdl" { * };
 import "game_state.cdl" { * };
+import "dungeon.cdl" { * };
+import "torches.cdl" { * };
 import "menu.cdl" { * };
 import "player.cdl" { * };
 import "enemy.cdl" { * };
+import "card.cdl" { * };
 import "ability.cdl" { * };
 import "hud.cdl" { * };
 
-const D6: string = "assets/d6/";
-const TOP: string = "assets/topSprites/";
-
-const sides: int = 3;
-
-@component struct Dice {
-
-}
-
-@settings(section: "settings")
-struct Settings {}
-
-
-
 @system(schedule: Schedule::Startup)
-fn build_dungeon(
-    assets: Assets, 
-    dg: DungeonSettings, 
-    window: Window, 
-    st: DungeonState, 
-    cmd: Commands, 
-    art: TorchAsset, 
-    ts: TorchSettings
-) {
-    art.sprite = texture(ts.sprite);
-    let o = start_dungeon(assets, window, dg, st);
+fn build_dungeon(assets: Assets, settings: DungeonSettings, window: Window, dungeon: DungeonState, cmd: Commands, torch_art: TorchAsset, torches: TorchSettings) {
+    torch_art.sprite = texture(torches.sprite);
+    start_dungeon(assets, window, settings, dungeon);
+    // The wall at the left end of the dungeon.
     cmd.spawn([
-        BoxCollider { half_size: vec2(0.5, window.height * .5), friction: 1, .. },
+        BoxCollider { half_size: vec2(0.5, window.height * 0.5), friction: 1.0, .. },
         at(-1.0, window.height * 0.5),
     ]);
 }
 
 @system(schedule: Schedule::Startup)
-fn load(cmd: Commands, window: Window, state: State<GameState>) {
+fn spawn_camera(cmd: Commands, window: Window, state: State<GameState>) {
     state.set(GameState::MainMenu);
-
     cmd.spawn([
         Camera { .. },
         CameraBounds {
-            area: Rect { y: 0.0 - 80.0, h: window.height, x: 0.0, w: 100000.0 },
+            area: Rect { x: 0.0, y: -80.0, w: 100000.0, h: window.height },
             ..
-        }
+        },
     ]);
-}
-
-// movement now lives in player.cdl (two copies both ran every frame).
-// @system(in_state: [GameState::Playing])
-// fn movement(player: (Player, Velocity)[], parts: (PlayerCollider, Velocity)[], input: Input) {
-//     for (d, v) in player {
-//         let x = 0.0;
-//         if input.key_down(Key::A) {
-//             x -= 400.0;
-//         }
-//         if input.key_down(Key::D) {
-//             x += 400.0;
-//         }
-//         let y = v.linear.y;
-//         if input.key_down(Key::W) {
-//             y = -520.0;
-//         }
-//         v.linear = vec2(x, y);
-//
-//         for (_, pv) in parts {
-//             pv.linear = v.linear;
-//             pv.angular = v.angular;
-//         }
-//     }
-// }
-
-//@system(schedule: Schedule::Startup)
-//fn setup_cards(cmd: Commands, assets: Assets, sets: CardSettings) {
-
-    // sets.bg = assets.aseprite("assets/cardBG.aseprite").texture;
-    // sets.tmp = assets.aseprite("assets/cardTempMiddle.aseprite").texture;
-    // spawn_card(cmd, assets, sets);
-//}
-
-// @system
-// fn update_dice(cmd: Commands, dice: (Dice, Sprite, Entity)[], time: Time , art: DiceD6Art){
-//     for (d, s, e) in dice {
-//         for i in range(d.change.tick(time.dt)){
-//             d.current = (d.current + 1) % 6;
-//             s.image = art.textures[d.current];
-//             s.color = Color { r: art.rng.next_float(), g: art.rng.next_float(), b: art.rng.next_float(), .. };
-//         }
-//            cmd.despawn(e);
-//     }
-// }
-
-@resource
-struct Controls {
-    played_before: bool = false,
-}
-
-@system(on_enter: GameState::Playing)
-fn show_controls(cmd: Commands, controls: Controls) {
-    
 }

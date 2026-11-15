@@ -11,17 +11,12 @@ scale_mode = "letterbox"
 [physics]
 gravity = [0, 2400]
 
-[settings]
-
 [dungeon]
-variant_chance = 0.4
-torches_per_chunk = 3     
+torches_per_chunk = 3
 torch_height = 0.75
-[card]
 
 [torches]
-glow = false 
-# ambient = { r = 0.32, g = 0.29, b = 0.36, a = 1.0 }
+glow = false
 
 [input]
 jump = ["key:W", "key:Space"]
@@ -34,5 +29,6 @@ backend = "webgpu"
 
 [lighting]
 enabled = true
+
 [debug]
 shown = false
