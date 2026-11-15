@@ -137,6 +137,10 @@ fn change(b: Brain, e: Enemy, id: Entity, to: Mode, why: string, s: EnemyAiSetti
     }
     b.mode.go(to);
     b.entered = true;
+    if to == Mode::Notice {
+        // Each die reacts a little differently.
+        b.reaction = s.reaction / tempo(s) * (0.8 + 0.04 * float(id.id % 11));
+    }
 }
 
 fn is_engaged(m: Mode) -> bool {
@@ -265,14 +269,12 @@ fn enemy_think(
     d: EnemyDirector,
     s: EnemyAiSettings,
     physics: Physics,
-    random: Random,
     time: Time
 ) {
     if players.len() == 0 {
         return;
     }
     let player = players[0].1.position;
-    let r = random.stream("enemy_ai");
     let player_vel = players[0].2.linear;
     let dt = time.dt;
     let pace = tempo(s);
@@ -364,9 +366,6 @@ fn enemy_think(
                 change(b, e, id, Mode::Notice, "saw the player", s);
             }
         } else if now == Mode::Notice {
-            if b.entered {
-                b.reaction = s.reaction / pace * r.range_float(0.8, 1.2);
-            }
             b.facing = sign(b.last_seen.x - pos.x);
             if b.mode.time >= b.reaction {
                 if b.unseen > s.forget_after {
