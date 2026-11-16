@@ -34,7 +34,6 @@ struct TorchGlow {
 @component
 struct Torch {}
 
-// The glow shader takes this many torch positions.
 const GLOW_SLOTS: int = 6;
 
 fn torch(cmd: Commands, pos: Vec2, s: TorchSettings, art: TorchAsset) -> Entity {
@@ -79,7 +78,6 @@ fn torch_ambient(effects: Effects, assets: Assets, s: TorchSettings, glow: Torch
     }
 }
 
-// Hands the screen positions of the first torches in view to the glow shader.
 @system
 fn torch_glow(torches: (Torch, Transform)[], cameras: (Camera, Transform)[], glow: TorchGlow, window: Window, s: TorchSettings) {
     if !glow.on {

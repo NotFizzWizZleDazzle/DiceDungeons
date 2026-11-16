@@ -1,7 +1,6 @@
 import "drift" { * };
 import "game_state.cdl" { * };
 
-// The player is a ball with three coloured prongs welded on; it rolls on the ground and is pushed in the air.
 @component
 struct Player {
     health: int = 3,
@@ -15,7 +14,6 @@ struct Player {
     stuck_time: float = 0.0,
 }
 
-// One of the three prongs, each its own body.
 @component
 struct PlayerCollider { i: int }
 
@@ -82,7 +80,6 @@ fn movement(player: (Player, Velocity, Transform)[], parts: (PlayerCollider, Ent
         if d.on_ground && input.key_pressed(Key::W) {
             y = -JUMP_SPEED;
         }
-        // On the ground the ball rolls; in the air the prongs are pushed sideways.
         let push = 0.0;
         if d.on_ground {
             if spin != 0.0 {
@@ -93,7 +90,6 @@ fn movement(player: (Player, Velocity, Transform)[], parts: (PlayerCollider, Ent
         }
         v.linear = vec2(clamp(v.linear.x, -MAX_SLIDE, MAX_SLIDE), y);
 
-        // Rolling into a wall without moving for a moment hops the ball over it.
         if spin != 0.0 && v.angular.abs() < 1.0 && v.linear.x.abs() < 30.0 {
             d.stuck_time += time.dt;
         } else {
@@ -125,7 +121,6 @@ fn start_run(old: (Entity, Player)[], old_parts: (Entity, PlayerCollider)[], cam
     }
 }
 
-// The prongs blink while the player cannot be hurt.
 @system(in_state: [GameState::Playing])
 fn player_iframes(player: (Entity, Player)[], parts: (PlayerCollider, Sprite)[], time: Time) {
     let alpha = 1.0;

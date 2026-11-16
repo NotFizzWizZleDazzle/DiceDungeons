@@ -6,7 +6,6 @@ import "drift" { * };
     PickingUpgrade,
 }
 
-// Collider categories.
 const WALL_BITS: int = 1;
 const PLAYER_BITS: int = 2;
 const ENEMY_BITS: int = 4;
@@ -18,7 +17,6 @@ fn min_int(a: int, b: int) -> int {
     return b;
 }
 
-// Whether the mouse is over a sprite of this size drawn with this transform.
 fn mouse_over(m: Vec2, size: Vec2, t: Transform) -> bool {
     let hw = size.x * t.scale.x * 0.5;
     let hh = size.y * t.scale.y * 0.5;

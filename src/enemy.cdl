@@ -4,17 +4,15 @@ import "player.cdl" { * };
 import "dungeon.cdl" { * };
 import "enemy_ai.cdl" { * };
 
-// An enemy is a die: its health is the face it shows, so a d6 starts with up to six and a d4 with up to four.
-// A d6 fights up close with a lunge; a d4 keeps its distance and shoots. How they decide is in enemy_ai.cdl.
 @component
 struct Enemy {
     health: int = 6,
     sides: int = 6,
     speed: float = 300.0,
     attack_cooldown: float = 1.2,
-    melee_range: float = 190.0,     // d6: starts its lunge this close, centre to centre
-    lunge_speed: float = 980.0,     // d6: the fastest sideways speed of its lunge
-    shot_speed: float = 420.0,      // d4: bolt speed, pixels per second
+    melee_range: float = 190.0,
+    lunge_speed: float = 980.0,
+    shot_speed: float = 420.0,
     hurt_time: float = 0.0,
     roll_time: float = 0.0,
     roll_tick: float = 0.0,
@@ -30,7 +28,6 @@ const ROLL_TIME: float = 0.45;
 const ROLL_STEP: float = 0.12;
 const PLAYER_HIT_RADIUS: float = 110.0;
 
-// A d4's shot.
 @component
 struct Bolt {
     dir: Vec2 = Vec2 { .. },
@@ -97,7 +94,6 @@ fn pick_sides(r: Rng, s: DungeonSettings) -> int {
     return 6;
 }
 
-// The enemies a chunk holds when it first streams in; more and likelier the deeper it is.
 fn spawn_chunk_enemies(cmd: Commands, foes: EnemyAssets, s: DungeonSettings, r: Rng, index: int, left: float, span: float, floor_y: float) {
     let depth = index - s.safe_chunks;
     let tries = s.max_enemies + depth / max_int(s.enemy_ramp, 1);
@@ -124,7 +120,6 @@ fn damage_enemy(e: Enemy, amount: int) {
     e.roll_tick = ROLL_STEP;
 }
 
-// Takes one heart, or the shield, and knocks the player away from `from`; the last heart ends the run.
 fn hurt_player(cmd: Commands, p: Player, e: Entity, pt: Transform, pv: Velocity, state: State<GameState>, from: Vec2) {
     if p.invuln > 0.0 {
         return;
@@ -197,7 +192,6 @@ fn new_dungeon(s: DungeonSettings, st: DungeonState, waves: EnemyWaves, random: 
     start_dungeon(assets, window, s, st);
 }
 
-// Extra enemies in every chunk past the safe ones, one more each `every` chunks.
 @system(in_state: [GameState::Playing], after: [stream_dungeon])
 fn enemy_waves(s: DungeonSettings, st: DungeonState, waves: EnemyWaves, foes: EnemyAssets, cmd: Commands) {
     let kept: int[] = [];
@@ -257,7 +251,6 @@ fn death_burst(cmd: Commands, pos: Vec2) {
     ]);
 }
 
-// A hit enemy rolls down, face by face, to its new health; at zero it bursts.
 @system(in_state: [GameState::Playing])
 fn enemy_faces(enemies: (Entity, Enemy, Sprite, Transform)[], assets: EnemyAssets, kills: Kills, time: Time, cmd: Commands) {
     for (id, e, sprite, t) in enemies {

@@ -6,102 +6,81 @@ import "enemy.cdl" { * };
 import "card.cdl" { * };
 import "ability.cdl" { * };
 
-// How the dice fight.
-//
-// Every enemy runs a small state machine:
-//
-//   Patrol  -> Notice   it sees the player in front of it, hears them close behind, is hit,
-//                       or another enemy nearby raises the alarm
-//   Notice  -> Chase    after a short reaction time, shown by a "!" and a hop
-//   Chase   -> Windup   d6: close enough and an attack slot is free; d4: a clear shot worth taking
-//   Windup  -> Strike   the telegraph runs out: a shrinking red ring before a lunge, an aim line
-//                       before a shot
-//   Strike  -> Recover  -> Chase
-//   Chase   -> Retreat  the player's next spell would finish it and the player has the mana for it
-//   Chase   -> Search   the player has been out of sight for a moment: it walks to where it last
-//                       saw them, looks both ways, then patrols from there
-//
-// Sight is checked a few times a second, staggered across enemies; decisions and movement run
-// every frame. [enemy_ai] in drift.toml tunes all of it; `difficulty` scales most of it at once.
-
 enum Mode { Patrol, Notice, Chase, Windup, Strike, Recover, Retreat, Search }
 
-// Tuning, from [enemy_ai] in drift.toml.
 @settings(section: "enemy_ai")
 struct EnemyAiSettings {
-    difficulty: float = 1.0,      // 0.5 is gentle, 1.5 is hard: reactions, telegraphs, aim, dodging, attackers
-    sight: float = 1100.0,        // how far an enemy sees, when nothing is in the way
-    hearing: float = 300.0,       // how close the player can be behind it before it notices
-    reaction: float = 0.45,       // seconds from noticing to acting
-    alert_radius: float = 900.0,  // enemies this close to one that notices the player join in
-    forget_after: float = 0.8,    // seconds out of sight before it goes looking
-    search_time: float = 4.0,     // seconds it looks around before it goes back to patrolling
-    patrol_span: float = 260.0,   // how far it wanders either side of where it started
-    melee_windup: float = 0.55,   // d6: how long the red ring shows before the lunge
-    melee_attackers: int = 2,     // d6s lunging at the same time; the rest wait their turn
-    ranged_aim: float = 0.75,     // d4: how long the aim line shows before the shot
-    ranged_lock: float = 0.25,    // d4: the aim stops following the player this long before the shot
-    ranged_gap: float = 0.5,      // shortest time between shots from different d4s
-    ranged_min: float = 420.0,    // d4: backs away when the player is closer than this
-    ranged_max: float = 950.0,    // d4: closes in when the player is farther than this
-    aim_lead: float = 0.7,        // 0 shoots where the player is, 1 where they will be
-    min_hit_chance: float = 0.35, // d4: shots less likely than this to land are not taken
-    dodge: float = 0.4,           // chance a d6 hops over a spell flying at it
-    think_rate: float = 8.0,      // sight checks per second
-    log_states: bool = false,     // log every change of state
-    show_states: bool = false,    // write each enemy's state above it
+    difficulty: float = 1.0,
+    sight: float = 1100.0,
+    hearing: float = 300.0,
+    reaction: float = 0.45,
+    alert_radius: float = 900.0,
+    forget_after: float = 0.8,
+    search_time: float = 4.0,
+    patrol_span: float = 260.0,
+    melee_windup: float = 0.55,
+    melee_attackers: int = 2,
+    ranged_aim: float = 0.75,
+    ranged_lock: float = 0.25,
+    ranged_gap: float = 0.5,
+    ranged_min: float = 420.0,
+    ranged_max: float = 950.0,
+    aim_lead: float = 0.7,
+    min_hit_chance: float = 0.35,
+    dodge: float = 0.4,
+    think_rate: float = 8.0,
+    log_states: bool = false,
+    show_states: bool = false,
 }
 
-// One enemy's mind.
 @component
 struct Brain {
     mode: Fsm<Mode> = fsm(Mode::Patrol),
-    entered: bool = true,      // the mode changed since steering last ran
-    home_x: float = 0.0,       // patrol centre
-    goal_x: float = 0.0,       // where it is walking to
+    entered: bool = true,
+    home_x: float = 0.0,
+    goal_x: float = 0.0,
     facing: float = 1.0,
     sees: bool = false,
     last_seen: Vec2 = Vec2 { .. },
-    unseen: float = 0.0,       // seconds since it last saw the player
-    think: float = 0.0,        // seconds to the next sight check
-    pause: float = 0.0,        // patrol: seconds left standing still
-    cooldown: float = 0.0,     // seconds until it may attack again
-    reaction: float = 0.0,     // Notice: this enemy's reaction time
-    side: float = 1.0,         // d6: the side of the player it fights from
-    aim: Vec2 = Vec2 { .. },   // d4: where the shot goes; d6: where the lunge goes
-    struck: bool = false,      // this attack is spent: the lunge hurt the player or the shot was fired
-    landed: bool = false,      // d6: the lunge hurt the player
+    unseen: float = 0.0,
+    think: float = 0.0,
+    pause: float = 0.0,
+    cooldown: float = 0.0,
+    reaction: float = 0.0,
+    side: float = 1.0,
+    aim: Vec2 = Vec2 { .. },
+    struck: bool = false,
+    landed: bool = false,
     grounded: bool = false,
-    blocked: bool = false,     // the way ahead is too high to jump
+    blocked: bool = false,
     dodge_cd: float = 0.0,
     jump_cd: float = 0.0,
     last_hurt: float = 0.0,
 }
 
-// What the enemies know together, worked out once a frame.
 @resource
 struct EnemyDirector {
-    attackers: int = 0,        // d6s winding up or lunging
-    left: int = 0,             // d6s fighting on the player's left
-    right: int = 0,            // and on the right
-    shot_gap: float = 0.0,     // seconds until another d4 may shoot
-    alarms: Vec2[] = [],       // where enemies noticed the player last frame
-    raised: Vec2[] = [],       // and this frame
-    xs: float[] = [],          // every enemy's position, for keeping apart
+    attackers: int = 0,
+    left: int = 0,
+    right: int = 0,
+    shot_gap: float = 0.0,
+    alarms: Vec2[] = [],
+    raised: Vec2[] = [],
+    xs: float[] = [],
     ys: float[] = [],
-    threat: int = 1,           // damage of the player's selected spell
-    can_cast: bool = true,     // whether the player has the mana for it
+    threat: int = 1,
+    can_cast: bool = true,
     player_health: int = 3,
-    rng: Rng = rng(1),         // dodge rolls and patrol pauses
+    rng: Rng = rng(1),
     seeded: bool = false,
 }
 
 const GRAVITY: float = 2400.0;
-const MELEE_HIT: float = 140.0;     // d6: the lunge hurts the player this close, centre to centre
-const WAIT_RING: float = 170.0;     // d6s without an attack slot hold this much farther out
-const MAX_JUMP: float = 330.0;      // the highest step an enemy jumps onto
+const MELEE_HIT: float = 140.0;
+const WAIT_RING: float = 170.0;
+const MAX_JUMP: float = 330.0;
 const ARRIVE: float = 24.0;
-const SAFE_DISTANCE: float = 720.0; // a retreating die stops backing away this far from the player
+const SAFE_DISTANCE: float = 720.0;
 
 fn mode_name(m: Mode) -> string {
     return match m {
@@ -120,12 +99,10 @@ fn kind_name(e: Enemy) -> string {
     return "d" + string(e.sides);
 }
 
-// Faster reactions and shorter telegraphs as difficulty rises: 1.0 at difficulty 1.
 fn tempo(s: EnemyAiSettings) -> float {
     return 0.5 + 0.5 * clamp(s.difficulty, 0.25, 2.0);
 }
 
-// d6s allowed to wind up or lunge at once.
 fn max_attackers(s: EnemyAiSettings) -> int {
     return max_int(int(float(s.melee_attackers) * clamp(s.difficulty, 0.5, 2.0) + 0.5), 1);
 }
@@ -140,7 +117,6 @@ fn change(b: Brain, e: Enemy, id: Entity, to: Mode, why: string, s: EnemyAiSetti
     b.mode.go(to);
     b.entered = true;
     if to == Mode::Notice {
-        // Each die reacts a little differently.
         b.reaction = s.reaction / tempo(s) * (0.8 + 0.04 * float(id.id % 11));
     }
 }
@@ -157,13 +133,15 @@ fn half_height(t: Transform) -> float {
     return 16.0 * t.scale.y;
 }
 
-// The damage and mana cost of the spell the player has selected.
 fn spell_damage(st: AbilityState, owned: Abilities) -> int {
     let n = max_int(count_of(owned, st.selected), 1);
-    if st.selected == "fireball" {
+    if st.selected == "fireball" || st.selected == "chainbolt" {
         return 1 + n;
     }
-    if st.selected == "iceknife" || st.selected == "gascloud" {
+    if st.selected == "gascloud" {
+        return 2 * n;
+    }
+    if st.selected == "iceknife" {
         return n;
     }
     return 1;
@@ -185,22 +163,16 @@ fn spell_cost(st: AbilityState) -> int {
     return BOLT_COST;
 }
 
-// How much of the player's motion a d4 leads its shot by.
 fn aim_lead(s: EnemyAiSettings) -> float {
     return clamp(s.aim_lead * min(s.difficulty, 1.3), 0.0, 1.0);
 }
 
-// Whether a d4 shot from `from` at the player is likely to land: the farther it flies and the
-// faster the player moves across it, the less of their motion the lead can guess.
 fn hit_chance(from: Vec2, target: Vec2, target_vel: Vec2, shot_speed: float, s: EnemyAiSettings) -> float {
     let flight = from.distance(target) / max(shot_speed, 1.0);
     let drift = target_vel.length() * flight * (1.0 - aim_lead(s) * 0.8);
     return clamp(1.0 - drift / (PLAYER_HIT_RADIUS * 4.0), 0.05, 1.0);
 }
 
-// Enemies weigh pressing the attack against backing off, and the dice decide it: an enemy on
-// its last pips facing a player whose next spell would finish it backs off, unless the player
-// is out of mana, the player is nearly dead, or it has nowhere to go.
 enum Stance { Attack, Retreat }
 
 fn stance(e: Enemy, d: EnemyDirector, allies_near: int, cornered: bool) -> Stance {
@@ -266,7 +238,6 @@ fn enemy_director(d: EnemyDirector, enemies: (Enemy, Brain, Transform)[], player
     }
 }
 
-// Senses and decisions.
 @system(in_state: [GameState::Playing], after: [enemy_director])
 fn enemy_think(
     enemies: (Entity, Enemy, Brain, Transform)[],
@@ -296,7 +267,6 @@ fn enemy_think(
         let to = player - pos;
         let dist = to.length();
 
-        // A hit: it knows where the player is, whatever it was doing.
         let hit = e.hurt_time > b.last_hurt + 0.0001;
         b.last_hurt = e.hurt_time;
         if hit {
@@ -309,7 +279,6 @@ fn enemy_think(
             }
         }
 
-        // Spells flying close by are heard.
         if is_calm(b.mode.now) {
             for (_, st) in shots {
                 if st.position.distance(pos) < s.hearing {
@@ -321,7 +290,6 @@ fn enemy_think(
             }
         }
 
-        // An alarm raised nearby.
         if is_calm(b.mode.now) {
             for a in d.alarms {
                 if a.distance(pos) < s.alert_radius {
@@ -332,8 +300,6 @@ fn enemy_think(
             }
         }
 
-        // Sight, a few times a second: in range, in front or close enough to hear, and nothing
-        // in the way.
         b.think -= dt;
         let look = b.think <= 0.0;
         if look {
@@ -354,7 +320,6 @@ fn enemy_think(
             b.unseen = 0.0;
         }
 
-        // Allies close by, and whether it has room to back away.
         let allies = 0;
         for i in range(d.xs.len()) {
             let gap = (d.xs[i] - pos.x).abs();
@@ -388,8 +353,6 @@ fn enemy_think(
             } else if b.mode.time > 0.6 && stance(e, d, allies, cornered) == Stance::Retreat {
                 change(b, e, id, Mode::Retreat, "player could finish it", s);
             } else if melee {
-                // Flank: when one side of the player is crowded and the other is empty, the
-                // farther ones go round, if there is room on the far side.
                 let my_side = sign(pos.x - player.x);
                 let mine = if my_side < 0.0 { d.left } else { d.right };
                 let theirs = if my_side < 0.0 { d.right } else { d.left };
@@ -454,12 +417,12 @@ fn enemy_think(
     }
 }
 
-// Movement, every frame: where to walk, when to jump, when to dodge.
 @system(in_state: [GameState::Playing], after: [enemy_think])
 fn enemy_steer(
     enemies: (Entity, Enemy, Brain, Transform, Velocity)[],
     players: (Player, Transform)[],
     shots: (Projectile, Transform)[],
+    clouds: (GasCloud, Transform)[],
     d: EnemyDirector,
     s: EnemyAiSettings,
     physics: Physics,
@@ -512,7 +475,6 @@ fn enemy_steer(
                     ring = e.melee_range + WAIT_RING;
                 }
                 goal = player.x + b.side * ring;
-                // Going round: hop over the player.
                 let across = (pos.x - player.x).abs();
                 if sign(pos.x - player.x) != b.side && across < 320.0 && b.grounded && b.jump_cd <= 0.0 {
                     v.linear = vec2(b.side * clamp(2.4 * across, 350.0, 750.0), -jump_speed(260.0));
@@ -554,7 +516,6 @@ fn enemy_steer(
         } else if now == Mode::Retreat && (player.x - pos.x).abs() < SAFE_DISTANCE {
             let away = sign(pos.x - player.x);
             goal = pos.x + away * 300.0;
-            // Back towards friends, if there are any that way.
             for i in range(d.xs.len()) {
                 let ax = d.xs[i];
                 if sign(ax - pos.x) == away && (ax - pos.x).abs() > 60.0 && (ax - pos.x).abs() < 900.0 {
@@ -573,7 +534,16 @@ fn enemy_steer(
             }
         }
 
-        // Walk, keeping apart from other dice and jumping onto what is in the way.
+        if now != Mode::Windup && now != Mode::Strike {
+            for (c, ct) in clouds {
+                if c.landed && c.life > 0.0 && (pos.x - ct.position.x).abs() < c.radius + 30.0 {
+                    let out = if pos.x < ct.position.x { -1.0 } else { 1.0 };
+                    goal = ct.position.x + out * (c.radius + 90.0);
+                    run = speed * 1.2;
+                }
+            }
+        }
+
         let moving = now != Mode::Windup && now != Mode::Strike && now != Mode::Notice;
         if moving {
             let dx = goal - pos.x;
@@ -596,7 +566,6 @@ fn enemy_steer(
                         let over = wall.point.x + dir * 14.0;
                         let top = physics.raycast_mask(vec2(over, pos.y - MAX_JUMP - half), vec2(0.0, 1.0), MAX_JUMP + half * 2.0, WALL_BITS);
                         let rise = pos.y + half - top.point.y;
-                        // Something overhead, such as a wide crate on a narrow one, would stop the jump.
                         let headroom = !physics.raycast_mask(pos, vec2(0.0, -1.0), rise + 20.0, WALL_BITS).hit;
                         if top.hit && top.fraction > 0.01 && rise <= MAX_JUMP && headroom {
                             v.linear = vec2(vx, -jump_speed(rise + 40.0));
@@ -610,7 +579,6 @@ fn enemy_steer(
             } else if now != Mode::Patrol && now != Mode::Search {
                 b.facing = sign(player.x - pos.x);
             }
-            // Climb up to a player standing on crates above.
             if e.sides == 6 && now == Mode::Chase && b.grounded && (player.x - pos.x).abs() < 200.0 && player.y < pos.y - 140.0 {
                 v.linear = vec2(sign(player.x - pos.x) * run, -jump_speed(pos.y - player.y + 60.0));
             }
@@ -619,7 +587,6 @@ fn enemy_steer(
             }
         }
 
-        // Dodge: a d6 that sees a spell about to hit it may hop over it.
         if e.sides == 6 && b.grounded && b.dodge_cd <= 0.0 && now != Mode::Strike && now != Mode::Patrol {
             for (shot, st) in shots {
                 let rel = pos - st.position;
@@ -647,7 +614,6 @@ fn jump_speed(height: float) -> float {
     return (2.0 * GRAVITY * max(height, 0.0)).sqrt();
 }
 
-// Attacks landing: the d6's lunge hurts on contact, once; the d4 shoots where it aimed.
 @system(in_state: [GameState::Playing], after: [enemy_steer])
 fn enemy_strikes(enemies: (Enemy, Brain, Transform)[], players: (Player, Transform, Velocity, Entity)[], cmd: Commands, state: State<GameState>) {
     for (e, b, t) in enemies {
@@ -673,8 +639,6 @@ fn enemy_strikes(enemies: (Enemy, Brain, Transform)[], players: (Player, Transfo
     }
 }
 
-// What the player sees coming: a "!" on noticing, a shrinking red ring before a lunge, an aim
-// line before a shot, a "?" while searching. Drawn over the lighting so it reads in the dark.
 @system(in_state: [GameState::Playing], after: [enemy_faces])
 fn enemy_telegraphs(enemies: (Enemy, Brain, Transform, Sprite)[], s: EnemyAiSettings, draw: Draw) {
     let pace = tempo(s);

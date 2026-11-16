@@ -8,8 +8,8 @@ const BOLT_COOLDOWN: float = 0.35;
 const BOLT_COST: int = 15;
 const FIRE_COOLDOWN: float = 1.2;
 const ICE_COOLDOWN: float = 0.6;
-const CHAIN_COOLDOWN: float = 1.5;
-const GAS_COOLDOWN: float = 3.0;
+const CHAIN_COOLDOWN: float = 1.8;
+const GAS_COOLDOWN: float = 3.5;
 const CAST_OFFSET: float = 130.0;
 const FIREBALL_SPEED: float = 720.0;
 const FIREBALL_LOFT: float = 380.0;
@@ -41,7 +41,6 @@ struct AbilityState {
     gas_cd: float = 0.0,
 }
 
-// Every spell the player throws flies under its own gravity until it hits something or its life runs out.
 @component
 struct Projectile {
     vel: Vec2 = Vec2 { .. },
@@ -93,13 +92,11 @@ fn in_wall(physics: Physics, p: Vec2) -> bool {
     return physics.overlap_circle_mask(p, 3.0, WALL_BITS).len() > 0;
 }
 
-// Applies gravity and returns this frame's step; the projectile does not move yet.
 fn fall_step(shot: Projectile, dt: float) -> Vec2 {
     shot.vel = shot.vel + vec2(0.0, shot.gravity * dt);
     return shot.vel * dt;
 }
 
-// Whether a step from p runs into a wall, or p is in one already.
 fn hits_wall(physics: Physics, p: Vec2, step: Vec2) -> bool {
     let len = step.length();
     if len > 0.0 && physics.raycast_mask(p, step * (1.0 / len), len, WALL_BITS).hit {
@@ -292,7 +289,6 @@ fn cast_abilities(player: (Player, Transform)[], enemies: (Entity, Enemy, Transf
     }
 }
 
-// Takes the mana for a spell when the player has enough.
 fn pay(p: Player, cost: int) -> bool {
     if p.mana < cost {
         return false;
@@ -596,12 +592,6 @@ fn shield(player: (Entity, Player, Transform)[], st: AbilityState, input: Input,
     }
 }
 
-// ---- Chain lightning ----
-//
-// A fast straight bolt along the aim. The first die it reaches takes 1 + level damage, and the
-// lightning then jumps at once to the nearest die in sight that it has not struck yet, 1 damage
-// each, 1 + level jumps.
-
 const CHAIN_SPEED: float = 2400.0;
 const CHAIN_RANGE: float = 950.0;
 const CHAIN_JUMP: float = 380.0;
@@ -612,7 +602,6 @@ struct ChainBolt {
     level: int = 1,
 }
 
-// A lightning path drawn for a moment.
 @component
 struct LightningArc {
     points: Vec2[] = [],
@@ -649,7 +638,6 @@ fn fly_chain_bolts(bolts: (Entity, Projectile, ChainBolt, Transform)[], enemies:
         let nearest = 1e9;
         let i = 0;
         for (_, e, et) in enemies {
-            // Swept test, so the fast bolt cannot pass through a die between two frames.
             let rel = et.position - t.position;
             let along = clamp(rel.dot(step) / max(step.dot(step), 0.0001), 0.0, 1.0);
             let miss = (rel - step * along).length();
@@ -671,7 +659,6 @@ fn fly_chain_bolts(bolts: (Entity, Projectile, ChainBolt, Transform)[], enemies:
     }
 }
 
-// Strikes the die at `first` in `enemies`, then jumps from die to die.
 fn chain_lightning(cmd: Commands, physics: Physics, from: Vec2, enemies: (Entity, Enemy, Transform)[], first: int, level: int) {
     let struck: int[] = [];
     let path: Vec2[] = [from];
@@ -694,7 +681,6 @@ fn chain_lightning(cmd: Commands, physics: Physics, from: Vec2, enemies: (Entity
             i += 1;
         }
         damage = 1;
-        // The next die: nearest one in reach and in sight, not struck yet.
         pick = -1;
         let best = CHAIN_JUMP;
         i = 0;
@@ -715,7 +701,6 @@ fn chain_lightning(cmd: Commands, physics: Physics, from: Vec2, enemies: (Entity
     }
 }
 
-// The path with kinks every 36 pixels, so it reads as lightning; a new `seed` moves the kinks.
 fn jagged(path: Vec2[], seed: int) -> Vec2[] {
     let out: Vec2[] = [];
     for k in range(path.len() - 1) {
@@ -761,7 +746,6 @@ fn zap(cmd: Commands, at_pos: Vec2, size: float) {
     }, 1.08);
 }
 
-// Lightning is drawn over the lighting, flickering: a wide soft glow under a thin bright core.
 @system
 fn draw_lightning(arcs: (Entity, LightningArc)[], draw: Draw, time: Time, cmd: Commands) {
     draw.overlay();
@@ -779,16 +763,10 @@ fn draw_lightning(arcs: (Entity, LightningArc)[], draw: Draw, time: Time, cmd: C
     }
 }
 
-// ---- Gas cloud ----
-//
-// A flask lobbed to land where the mouse is; it bursts on a wall, the floor or a die, and leaves
-// a cloud on the ground.
-// Every die inside the cloud takes `level` damage each tick until the cloud thins out.
-
 const GAS_RADIUS: float = 180.0;
 const GAS_TICK: float = 0.75;
 const GAS_LIFE: float = 3.0;
-const GAS_FADE: float = 4.4;       // the last particles' lifetime after the cloud stops hurting
+const GAS_FADE: float = 4.4;
 const GAS_GLOW: Color = Color { r: 0.45, g: 1.0, b: 0.3, a: 1.0 };
 
 @component
@@ -814,7 +792,6 @@ const GAS_GRAVITY: float = 1000.0;
 fn spawn_gas_flask(cmd: Commands, from: Vec2, target: Vec2, level: int) {
     let hot = col(0.7, 1.0, 0.4, 1.0);
     let cool = col(0.2, 0.55, 0.05, 0.0);
-    // The arc that reaches the target: longer throws fly longer and higher.
     let to = target - from;
     if to.length() > GAS_THROW_RANGE {
         to = to.normalized() * GAS_THROW_RANGE;
@@ -932,7 +909,6 @@ fn gas_clouds(clouds: (Entity, GasCloud, Transform, ParticleEmitter, PointLight)
                 glow.intensity = max(glow.intensity - 2.0 * time.dt, 1.4);
             }
         } else {
-            // Spent: no more damage, the smoke stops and drifts away.
             smoke.rate = 0.0;
             c.fade += time.dt;
             glow.intensity = max(1.4 * (1.0 - c.fade / 1.2), 0.0);
@@ -943,7 +919,6 @@ fn gas_clouds(clouds: (Entity, GasCloud, Transform, ParticleEmitter, PointLight)
     }
 }
 
-// The cloud's reach, drawn faintly so the player can see where it hurts.
 @system(in_state: [GameState::Playing])
 fn draw_gas(clouds: (GasCloud, Transform)[], draw: Draw) {
     draw.overlay();

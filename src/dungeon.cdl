@@ -216,7 +216,6 @@ fn spawn_chunk(art: TorchAsset, cmd: Commands, st: DungeonState, s: DungeonSetti
         cmd.insert(t, Chunk { index: index });
     }
 
-    // Crates and enemies share one random sequence per chunk, so a chunk comes back the same.
     let r = rng(s.seed + index * 7349 + 17);
     let floor_y = st.floor_top * k;
     let left = x0 * k;
@@ -227,7 +226,6 @@ fn spawn_chunk(art: TorchAsset, cmd: Commands, st: DungeonState, s: DungeonSetti
     }
 }
 
-// Up to max_crates crates on the floor, some stacked on others.
 fn spawn_crates(cmd: Commands, crates: CrateAssets, s: DungeonSettings, r: Rng, index: int, left: float, span: float, floor_y: float) {
     let ceiling_y = s.ceiling * s.scale;
     let xs: float[] = [];

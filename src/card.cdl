@@ -58,7 +58,6 @@ struct Card {
 @component
 struct CardPart {}
 
-// A card is three layers: the middle, the frame and the ability's picture.
 fn spawn_card(cmd: Commands, art: CardAsset, ability: int, pos: Vec2, scale: float) {
     cmd.spawn([
         Transform { position: pos, scale: vec2(scale, scale), .. },
@@ -85,7 +84,6 @@ fn reset_upgrades(progress: UpgradeProgress, owned: Abilities, kills: Kills) {
     owned.owned = [];
 }
 
-// After the kill counts in card_at, and after these, a card always drops.
 const CARD_KILLS: int[] = [3, 8, 12, 16, 20, 24];
 
 fn card_due(sets: CardSettings, kill: int) -> bool {

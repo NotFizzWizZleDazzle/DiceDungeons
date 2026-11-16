@@ -15,7 +15,6 @@ import "hud.cdl" { * };
 fn build_dungeon(assets: Assets, settings: DungeonSettings, window: Window, dungeon: DungeonState, cmd: Commands, torch_art: TorchAsset, torches: TorchSettings) {
     torch_art.sprite = texture(torches.sprite);
     start_dungeon(assets, window, settings, dungeon);
-    // The wall at the left end of the dungeon.
     cmd.spawn([
         BoxCollider { half_size: vec2(0.5, window.height * 0.5), friction: 1.0, .. },
         at(-1.0, window.height * 0.5),
