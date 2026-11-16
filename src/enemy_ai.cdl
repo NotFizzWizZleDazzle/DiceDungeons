@@ -92,6 +92,8 @@ struct EnemyDirector {
     threat: int = 1,           // damage of the player's selected spell
     can_cast: bool = true,     // whether the player has the mana for it
     player_health: int = 3,
+    rng: Rng = rng(1),         // dodge rolls and patrol pauses
+    seeded: bool = false,
 }
 
 const GRAVITY: float = 2400.0;
@@ -228,7 +230,11 @@ fn stance(e: Enemy, d: EnemyDirector, allies_near: int, cornered: bool) -> Stanc
 }
 
 @system(in_state: [GameState::Playing])
-fn enemy_director(d: EnemyDirector, enemies: (Enemy, Brain, Transform)[], players: (Player, Transform)[], st: AbilityState, owned: Abilities, time: Time) {
+fn enemy_director(d: EnemyDirector, enemies: (Enemy, Brain, Transform)[], players: (Player, Transform)[], st: AbilityState, owned: Abilities, random: Random, time: Time) {
+    if !d.seeded {
+        d.rng = random.stream("enemy_ai");
+        d.seeded = true;
+    }
     d.attackers = 0;
     d.left = 0;
     d.right = 0;
@@ -457,14 +463,12 @@ fn enemy_steer(
     d: EnemyDirector,
     s: EnemyAiSettings,
     physics: Physics,
-    random: Random,
     time: Time
 ) {
     if players.len() == 0 {
         return;
     }
     let player = players[0].1.position;
-    let r = random.stream("enemy_ai");
     let dt = time.dt;
     for (id, e, b, t, v) in enemies {
         let pos = t.position;
@@ -489,9 +493,9 @@ fn enemy_steer(
             if b.pause > 0.0 {
                 b.pause -= dt;
             } else if (b.goal_x - pos.x).abs() < ARRIVE || b.blocked {
-                b.pause = r.range_float(0.6, 1.4);
+                b.pause = d.rng.range_float(0.6, 1.4);
                 b.facing = -b.facing;
-                b.goal_x = b.home_x + b.facing * s.patrol_span * r.range_float(0.5, 1.0);
+                b.goal_x = b.home_x + b.facing * s.patrol_span * d.rng.range_float(0.5, 1.0);
                 b.blocked = false;
             } else {
                 goal = b.goal_x;
@@ -625,7 +629,7 @@ fn enemy_steer(
                     let miss = (rel - shot.vel * eta).length();
                     if eta > 0.05 && eta < 0.4 && miss < 110.0 && b.dodge_cd <= 0.0 {
                         b.dodge_cd = 0.9;
-                        let dodges = r.chance(clamp(s.dodge * s.difficulty, 0.0, 0.95));
+                        let dodges = d.rng.chance(clamp(s.dodge * s.difficulty, 0.0, 0.95));
                         if dodges {
                             v.linear = vec2(sign(rel.x) * speed, -jump_speed(240.0));
                         }

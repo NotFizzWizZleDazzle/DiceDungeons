@@ -32,3 +32,6 @@ enabled = true
 
 [debug]
 shown = false
+
+[enemy_ai]
+difficulty = 1.0
