@@ -10,14 +10,12 @@ const FIRE_COOLDOWN: float = 1.2;
 const ICE_COOLDOWN: float = 0.6;
 const CHAIN_COOLDOWN: float = 1.5;
 const GAS_COOLDOWN: float = 3.0;
-const ENEMY_HIT_RADIUS: float = 55.0;
 const CAST_OFFSET: float = 130.0;
 const FIREBALL_SPEED: float = 720.0;
 const FIREBALL_LOFT: float = 380.0;
 const SHIELD_COOLDOWN: float = 8.0;
 const SHIELD_TIME: float = 6.0;
 const SHIELD_RADIUS: float = 150.0;
-const CORE_CLEAR: float = 64.0;
 const MANA_REGEN: float = 10.0;
 const MANA_PER_KILL: int = 6;
 const FIRE_COST: int = 25;
@@ -70,25 +68,6 @@ struct IceKnife {
     slow: float = 2.0,
     hit: int[] = [],
     sparkle: Entity = Entity { .. },
-}
-
-@component
-struct GasCloud {
-    radius: float = 450.0,
-    damage: int = 1,
-    every: float = 0.6,
-    tick: float = 0.0,
-    life: float = 4.0,
-    fall: float = 0.0,
-    landed: bool = false,
-    bubbles: Entity = Entity { .. },
-}
-
-// A thrown chain bolt or gas flask.
-@component
-struct Throw {
-    kind: string = "",
-    level: int = 1,
 }
 
 @component
@@ -303,12 +282,12 @@ fn cast_abilities(player: (Player, Transform)[], enemies: (Entity, Enemy, Transf
         let chain = count_of(owned, "chainbolt");
         if st.selected == "chainbolt" && chain > 0 && st.chain_cd <= 0.0 && pay(p, CHAIN_COST) {
             st.chain_cd = CHAIN_COOLDOWN;
-            spawn_throw(cmd, from, aim, "chain", chain);
+            spawn_chain_bolt(cmd, from, aim, chain);
         }
         let gas = count_of(owned, "gascloud");
         if st.selected == "gascloud" && gas > 0 && st.gas_cd <= 0.0 && pay(p, GAS_COST) {
             st.gas_cd = GAS_COOLDOWN;
-            spawn_throw(cmd, from, aim, "gas", gas);
+            spawn_gas_flask(cmd, from, mouse, gas);
         }
     }
 }
@@ -412,94 +391,6 @@ fn ice_shatter(cmd: Commands, at_pos: Vec2, big: bool) {
     }, 2.7);
 }
 
-fn spawn_gas(cmd: Commands, where_at: Vec2, damage: int) {
-    let bubbles = fx(cmd, where_at, ParticleEmitter {
-        rate: 30.0, lifetime_min: 1.44, lifetime_max: 3.24,
-        speed_min: 10.0, speed_max: 40.0, gravity: vec2(0.0, -70.0),
-        size_start: 5.0, size_start_max: 9.0, size_end: 11.0,
-        color_start: col(0.65, 1.0, 0.35, 0.9), color_end: col(0.3, 0.8, 0.1, 0.0),
-        shape: EmitShape::Circle, shape_radius: 120.0,
-        blend: Blend::Additive, max_particles: 126, z: 151.0, ..
-    }, 10.8);
-    cmd.spawn([
-        at(where_at.x, where_at.y),
-        GasCloud { damage: damage, bubbles: bubbles, .. },
-        ParticleEmitter {
-            rate: 110.0, lifetime_min: 2.16, lifetime_max: 4.32, prewarm: 0.6,
-            speed_min: 5.0, speed_max: 35.0, drag: 0.8,
-            size_start: 30.0, size_start_max: 48.0, size_end: 80.0,
-            color_start: col(0.42, 0.85, 0.22, 0.45), color_end: col(0.18, 0.4, 0.08, 0.0),
-            shape: EmitShape::Circle, shape_radius: 130.0,
-            spin_min: -1.2, spin_max: 1.2,
-            blend: Blend::Alpha, max_particles: 576, z: 150.0, ..
-        },
-    ]);
-    flash(cmd, where_at, col(0.4, 1.0, 0.3, 1.0), 2.0, 380.0, 0.2);
-}
-
-fn spark_line(cmd: Commands, a: Vec2, b: Vec2) {
-    let d = b - a;
-    let steps = int(d.length() / 18.0) + 1;
-    for i in range(steps + 1) {
-        let k = float(i) / float(steps);
-        let jitter = vec2(sin(float(i) * 12.9898) * 10.0, cos(float(i) * 78.233) * 10.0);
-        fx(cmd, a + d * k + jitter, ParticleEmitter {
-            rate: 0.0, bursts: [Burst { count: 10, .. }],
-            lifetime_min: 0.18, lifetime_max: 0.81, speed_min: 20.0, speed_max: 160.0, gravity: vec2(0.0, 900.0),
-            size_start: 7.0, size_start_max: 10.0, size_end: 0.5,
-            color_start: col(0.92, 0.97, 1.0, 1.0), color_end: col(0.45, 0.55, 1.0, 0.0),
-            blend: Blend::Additive, max_particles: 25, duration: 0.1, looping: false, z: 172.0, ..
-        }, 0.9);
-    }
-}
-
-fn zap(cmd: Commands, at_pos: Vec2) {
-    flash(cmd, at_pos, col(0.6, 0.75, 1.0, 1.0), 4.0, 320.0, 0.12);
-    burst(cmd, at_pos, 50, 420.0, 8.0, col(0.95, 0.98, 1.0, 1.0), col(0.4, 0.5, 1.0, 0.0), 0.45);
-    fx(cmd, at_pos, ParticleEmitter {
-        rate: 0.0, bursts: [Burst { count: 40, .. }],
-        lifetime_min: 0.27, lifetime_max: 0.54, speed_min: 600.0, speed_max: 700.0, drag: 5.0, gravity: vec2(0.0, 900.0),
-        size_start: 5.0, size_end: 1.0, shape: EmitShape::Ring, shape_radius: 16.0,
-        color_start: col(0.85, 0.95, 1.0, 1.0), color_end: col(0.4, 0.5, 1.0, 0.0),
-        blend: Blend::Additive, max_particles: 90, duration: 0.1, looping: false, z: 173.0, ..
-    }, 1.08);
-}
-
-fn chain_bolt(cmd: Commands, physics: Physics, from: Vec2, enemies: (Entity, Enemy, Transform)[], jumps: int, damage: int) {
-    let hit: int[] = [];
-    let here = from;
-    let reach = 500.0;
-    for j in range(jumps) {
-        let best = -1;
-        let best_d = reach;
-        let i = 0;
-        for (id, _, et) in enemies {
-            let d = here.distance(et.position);
-            let clear = d > 0.0 && !physics.raycast_mask(here, (et.position - here).normalized(), d, WALL_BITS).hit;
-            if d <= best_d && !hit.contains(id.id) && clear {
-                best = i;
-                best_d = d;
-            }
-            i += 1;
-        }
-        if best < 0 {
-            return;
-        }
-        let i2 = 0;
-        for (id, e, et) in enemies {
-            if i2 == best {
-                hit.push(id.id);
-                spark_line(cmd, here, et.position);
-                damage_enemy(e, damage);
-                zap(cmd, et.position);
-                here = et.position;
-            }
-            i2 += 1;
-        }
-        reach = 320.0;
-    }
-}
-
 fn explode(cmd: Commands, at_pos: Vec2, b: Fireball, enemies: (Entity, Enemy, Transform)[]) {
     for (_, e, et) in enemies {
         if at_pos.distance(et.position) <= b.radius {
@@ -597,39 +488,6 @@ fn fly_ice_knives(knives: (Entity, Projectile, IceKnife, Transform)[], enemies: 
             ice_shatter(cmd, t.position, false);
             cmd.insert(k.sparkle, Fx { life: 1.44 });
             cmd.despawn(ke);
-        }
-    }
-}
-
-@system(in_state: [GameState::Playing])
-fn gas_clouds(clouds: (Entity, GasCloud, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
-    for (ce, c, t) in clouds {
-        if !c.landed {
-            c.fall += 1400.0 * time.dt;
-            let drop = c.fall * time.dt;
-            let ground = physics.raycast_mask(t.position, vec2(0.0, 1.0), drop + 40.0, WALL_BITS);
-            if ground.hit {
-                t.position = vec2(t.position.x, ground.point.y - 40.0);
-                c.landed = true;
-                flash(cmd, t.position, col(0.4, 1.0, 0.3, 1.0), 2.0, 380.0, 0.2);
-            } else {
-                t.position = t.position + vec2(0.0, drop);
-            }
-            cmd.insert(c.bubbles, Transform { position: t.position, .. });
-        }
-        c.life -= time.dt;
-        c.tick -= time.dt;
-        if c.tick <= 0.0 {
-            c.tick = c.every;
-            for (_, e, et) in enemies {
-                if t.position.distance(et.position) <= c.radius {
-                    damage_enemy(e, c.damage);
-                }
-            }
-        }
-        if c.life <= 0.0 {
-            cmd.insert(c.bubbles, Fx { life: 0.18 });
-            cmd.despawn(ce);
         }
     }
 }
@@ -738,21 +596,237 @@ fn shield(player: (Entity, Player, Transform)[], st: AbilityState, input: Input,
     }
 }
 
-fn spawn_throw(cmd: Commands, from: Vec2, dir: Vec2, kind: string, level: int) {
-    let glow = col(0.6, 0.8, 1.0, 1.0);
-    let hot = col(0.95, 0.98, 1.0, 1.0);
-    let cool = col(0.35, 0.45, 1.0, 0.0);
-    if kind == "gas" {
-        glow = col(0.45, 1.0, 0.3, 1.0);
-        hot = col(0.7, 1.0, 0.4, 1.0);
-        cool = col(0.2, 0.55, 0.05, 0.0);
+// ---- Chain lightning ----
+//
+// A fast straight bolt along the aim. The first die it reaches takes 1 + level damage, and the
+// lightning then jumps at once to the nearest die in sight that it has not struck yet, 1 damage
+// each, 1 + level jumps.
+
+const CHAIN_SPEED: float = 2400.0;
+const CHAIN_RANGE: float = 950.0;
+const CHAIN_JUMP: float = 380.0;
+const CHAIN_LIGHT: Color = Color { r: 0.6, g: 0.8, b: 1.0, a: 1.0 };
+
+@component
+struct ChainBolt {
+    level: int = 1,
+}
+
+// A lightning path drawn for a moment.
+@component
+struct LightningArc {
+    points: Vec2[] = [],
+    life: float = 0.32,
+    age: float = 0.0,
+}
+
+fn spawn_chain_bolt(cmd: Commands, from: Vec2, dir: Vec2, level: int) {
+    cmd.spawn([
+        Transform { position: from, rotation: dir.angle(), scale: vec2(3.0, 3.0), .. },
+        Projectile { vel: dir * CHAIN_SPEED, gravity: 0.0, life: CHAIN_RANGE / CHAIN_SPEED },
+        ChainBolt { level: level },
+        Sprite { image: texture("assets/fx/chainBolt.png"), z: 155.0, .. },
+        PointLight { color: CHAIN_LIGHT, intensity: 2.4, radius: 260.0, falloff: 1.5, shadows: false, .. },
+        ParticleEmitter {
+            rate: 220.0, lifetime_min: 0.18, lifetime_max: 0.5,
+            speed_min: 30.0, speed_max: 160.0,
+            size_start: 6.0, size_start_max: 9.0, size_end: 0.5,
+            color_start: col(0.95, 0.98, 1.0, 1.0), color_end: col(0.35, 0.45, 1.0, 0.0),
+            shape: EmitShape::Circle, shape_radius: 8.0, spin_min: -6.0, spin_max: 6.0,
+            blend: Blend::Additive, max_particles: 160, z: 154.0, ..
+        },
+    ]);
+    burst(cmd, from, 18, 220.0, 7.0, col(0.95, 0.98, 1.0, 1.0), col(0.35, 0.45, 1.0, 0.0), 0.3);
+}
+
+@system(in_state: [GameState::Playing])
+fn fly_chain_bolts(bolts: (Entity, Projectile, ChainBolt, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
+    for (be, shot, bolt, t) in bolts {
+        let step = shot.vel * time.dt;
+        let stop = hits_wall(physics, t.position, step);
+        shot.life -= time.dt;
+        let target = -1;
+        let nearest = 1e9;
+        let i = 0;
+        for (_, e, et) in enemies {
+            // Swept test, so the fast bolt cannot pass through a die between two frames.
+            let rel = et.position - t.position;
+            let along = clamp(rel.dot(step) / max(step.dot(step), 0.0001), 0.0, 1.0);
+            let miss = (rel - step * along).length();
+            if e.health > 0 && miss <= enemy_reach(et) && along < nearest {
+                nearest = along;
+                target = i;
+            }
+            i += 1;
+        }
+        if target >= 0 {
+            chain_lightning(cmd, physics, t.position, enemies, target, bolt.level);
+            cmd.despawn(be);
+        } else if stop || shot.life <= 0.0 {
+            zap(cmd, t.position, 0.5);
+            cmd.despawn(be);
+        } else {
+            t.position = t.position + step;
+        }
     }
-    let vel = dir * 760.0 + vec2(0.0, -300.0);
-    let shot = cmd.spawn([
+}
+
+// Strikes the die at `first` in `enemies`, then jumps from die to die.
+fn chain_lightning(cmd: Commands, physics: Physics, from: Vec2, enemies: (Entity, Enemy, Transform)[], first: int, level: int) {
+    let struck: int[] = [];
+    let path: Vec2[] = [from];
+    let here = from;
+    let pick = first;
+    let damage = 1 + level;
+    for jump in range(2 + level) {
+        if pick < 0 {
+            break;
+        }
+        let i = 0;
+        for (id, e, et) in enemies {
+            if i == pick {
+                struck.push(id.id);
+                path.push(et.position);
+                damage_enemy(e, damage);
+                zap(cmd, et.position, 1.3);
+                here = et.position;
+            }
+            i += 1;
+        }
+        damage = 1;
+        // The next die: nearest one in reach and in sight, not struck yet.
+        pick = -1;
+        let best = CHAIN_JUMP;
+        i = 0;
+        for (id, e, et) in enemies {
+            let d = here.distance(et.position);
+            if e.health > 0 && d > 1.0 && d <= best && !struck.contains(id.id) {
+                if !physics.raycast_mask(here, (et.position - here).normalized(), d, WALL_BITS).hit {
+                    best = d;
+                    pick = i;
+                }
+            }
+            i += 1;
+        }
+    }
+    cmd.spawn([at(from.x, from.y), LightningArc { points: path, .. }]);
+    for k in range(path.len() - 1) {
+        spark_line(cmd, path[k], path[k + 1]);
+    }
+}
+
+// The path with kinks every 36 pixels, so it reads as lightning; a new `seed` moves the kinks.
+fn jagged(path: Vec2[], seed: int) -> Vec2[] {
+    let out: Vec2[] = [];
+    for k in range(path.len() - 1) {
+        let a = path[k];
+        let b = path[k + 1];
+        let d = b - a;
+        let steps = int(d.length() / 36.0) + 1;
+        let side = vec2(-d.y, d.x).normalized();
+        for i in range(steps) {
+            let wobble = if i == 0 { 0.0 } else { sin(float(i * 7 + k * 13 + seed * 31) * 12.9898) * 22.0 };
+            out.push(a + d * (float(i) / float(steps)) + side * wobble);
+        }
+    }
+    out.push(path[path.len() - 1]);
+    return out;
+}
+
+fn spark_line(cmd: Commands, a: Vec2, b: Vec2) {
+    let d = b - a;
+    let steps = int(d.length() / 48.0) + 1;
+    for i in range(steps + 1) {
+        let k = float(i) / float(steps);
+        fx(cmd, a + d * k, ParticleEmitter {
+            rate: 0.0, bursts: [Burst { count: 10, .. }],
+            lifetime_min: 0.18, lifetime_max: 0.6, speed_min: 20.0, speed_max: 160.0, gravity: vec2(0.0, 900.0),
+            size_start: 6.0, size_start_max: 9.0, size_end: 0.5,
+            color_start: col(0.92, 0.97, 1.0, 1.0), color_end: col(0.45, 0.55, 1.0, 0.0),
+            blend: Blend::Additive, max_particles: 25, duration: 0.1, looping: false, z: 172.0, ..
+        }, 0.8);
+    }
+    flash(cmd, a + d * 0.5, CHAIN_LIGHT, 2.5, d.length() * 0.6 + 120.0, 0.15);
+}
+
+fn zap(cmd: Commands, at_pos: Vec2, size: float) {
+    flash(cmd, at_pos, col(0.6, 0.75, 1.0, 1.0), 4.0 * size, 320.0 * size, 0.14);
+    burst(cmd, at_pos, int(50.0 * size), 420.0 * size, 8.0, col(0.95, 0.98, 1.0, 1.0), col(0.4, 0.5, 1.0, 0.0), 0.45);
+    fx(cmd, at_pos, ParticleEmitter {
+        rate: 0.0, bursts: [Burst { count: int(40.0 * size), .. }],
+        lifetime_min: 0.27, lifetime_max: 0.54, speed_min: 600.0 * size, speed_max: 700.0 * size, drag: 5.0, gravity: vec2(0.0, 900.0),
+        size_start: 5.0, size_end: 1.0, shape: EmitShape::Ring, shape_radius: 16.0,
+        color_start: col(0.85, 0.95, 1.0, 1.0), color_end: col(0.4, 0.5, 1.0, 0.0),
+        blend: Blend::Additive, max_particles: 90, duration: 0.1, looping: false, z: 173.0, ..
+    }, 1.08);
+}
+
+// Lightning is drawn over the lighting, flickering: a wide soft glow under a thin bright core.
+@system
+fn draw_lightning(arcs: (Entity, LightningArc)[], draw: Draw, time: Time, cmd: Commands) {
+    draw.overlay();
+    for (e, arc) in arcs {
+        arc.age += time.dt;
+        if arc.age >= arc.life {
+            cmd.despawn(e);
+        } else {
+            let fade = 1.0 - arc.age / arc.life;
+            let points = jagged(arc.points, int(arc.age * 40.0));
+            draw.polyline(points, col(0.45, 0.6, 1.0, 0.3 * fade), 22.0);
+            draw.polyline(points, col(0.7, 0.85, 1.0, 0.7 * fade), 9.0);
+            draw.polyline(points, col(1.0, 1.0, 1.0, fade), 3.0);
+        }
+    }
+}
+
+// ---- Gas cloud ----
+//
+// A flask lobbed to land where the mouse is; it bursts on a wall, the floor or a die, and leaves
+// a cloud on the ground.
+// Every die inside the cloud takes `level` damage each tick until the cloud thins out.
+
+const GAS_RADIUS: float = 180.0;
+const GAS_TICK: float = 0.75;
+const GAS_LIFE: float = 3.0;
+const GAS_FADE: float = 4.4;       // the last particles' lifetime after the cloud stops hurting
+const GAS_GLOW: Color = Color { r: 0.45, g: 1.0, b: 0.3, a: 1.0 };
+
+@component
+struct GasFlask {
+    level: int = 1,
+}
+
+@component
+struct GasCloud {
+    radius: float = 180.0,
+    damage: int = 1,
+    tick: float = 0.0,
+    life: float = 3.0,
+    fade: float = 0.0,
+    fall: float = 0.0,
+    landed: bool = false,
+    bubbles: Entity = Entity { .. },
+}
+
+const GAS_THROW_RANGE: float = 1100.0;
+const GAS_GRAVITY: float = 1000.0;
+
+fn spawn_gas_flask(cmd: Commands, from: Vec2, target: Vec2, level: int) {
+    let hot = col(0.7, 1.0, 0.4, 1.0);
+    let cool = col(0.2, 0.55, 0.05, 0.0);
+    // The arc that reaches the target: longer throws fly longer and higher.
+    let to = target - from;
+    if to.length() > GAS_THROW_RANGE {
+        to = to.normalized() * GAS_THROW_RANGE;
+    }
+    let flight = clamp(to.length() / 900.0, 0.3, 1.2);
+    let vel = vec2(to.x / flight, to.y / flight - 0.5 * GAS_GRAVITY * flight);
+    cmd.spawn([
         Transform { position: from, rotation: vel.angle(), scale: vec2(3.0, 3.0), .. },
-        Projectile { vel: vel, gravity: 1000.0, life: 3.0 },
-        Throw { kind: kind, level: level },
-        PointLight { color: glow, intensity: 2.0, radius: 240.0, falloff: 1.5, shadows: false, .. },
+        Projectile { vel: vel, gravity: GAS_GRAVITY, life: 3.0 },
+        GasFlask { level: level },
+        Circle { radius: 6.0, color: hot, z: 155.0, .. },
+        PointLight { color: GAS_GLOW, intensity: 2.0, radius: 240.0, falloff: 1.5, shadows: false, .. },
         ParticleEmitter {
             rate: 150.0, lifetime_min: 0.27, lifetime_max: 0.9,
             speed_min: 30.0, speed_max: 160.0, gravity: vec2(0.0, 600.0),
@@ -762,57 +836,121 @@ fn spawn_throw(cmd: Commands, from: Vec2, dir: Vec2, kind: string, level: int) {
             blend: Blend::Additive, max_particles: 216, z: 154.0, ..
         },
     ]);
-    if kind == "chain" {
-        cmd.insert(shot, Sprite { image: texture("assets/fx/chainBolt.png"), z: 155.0, .. });
-    } else {
-        cmd.insert(shot, Circle { radius: 4.0, color: hot, z: 155.0, .. });
-    }
     burst(cmd, from, 18, 220.0, 7.0, hot, cool, 0.3);
 }
 
 @system(in_state: [GameState::Playing])
-fn fly_throws(throws: (Entity, Projectile, Throw, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
-    for (te, shot, th, t) in throws {
+fn fly_gas_flasks(flasks: (Entity, Projectile, GasFlask, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
+    for (fe, shot, flask, t) in flasks {
         let step = fall_step(shot, time.dt);
         let len = step.length();
-        let hit_wall = false;
+        let burst_here = false;
         if len > 0.0 {
             let ray = physics.raycast_mask(t.position, step * (1.0 / len), len, WALL_BITS);
             if ray.hit {
-                hit_wall = true;
+                burst_here = true;
                 t.position = ray.point - step * (2.0 / len);
             }
         }
-        if !hit_wall && in_wall(physics, t.position) {
-            hit_wall = true;
+        if !burst_here && in_wall(physics, t.position) {
+            burst_here = true;
         }
-        if !hit_wall {
+        if !burst_here {
             t.position = t.position + step;
         }
         shot.life -= time.dt;
-        let hit = hit_wall || shot.life <= 0.0;
-        if th.kind != "gas" {
-            for (_, _, et) in enemies {
-                if t.position.distance(et.position) <= enemy_reach(et) {
-                    hit = true;
+        for (_, e, et) in enemies {
+            if e.health > 0 && t.position.distance(et.position) <= enemy_reach(et) {
+                burst_here = true;
+            }
+        }
+        if burst_here || shot.life <= 0.0 {
+            flash(cmd, t.position, GAS_GLOW, 5.0, 600.0, 0.2);
+            burst(cmd, t.position, 140, 620.0, 14.0, col(0.75, 1.0, 0.45, 1.0), col(0.2, 0.5, 0.05, 0.0), 0.7);
+            burst(cmd, t.position, 50, 260.0, 30.0, col(0.5, 0.9, 0.3, 0.6), col(0.2, 0.45, 0.1, 0.0), 1.0);
+            spawn_gas(cmd, t.position, flask.level);
+            cmd.despawn(fe);
+        }
+    }
+}
+
+fn spawn_gas(cmd: Commands, where_at: Vec2, damage: int) {
+    let bubbles = fx(cmd, where_at, ParticleEmitter {
+        rate: 40.0, lifetime_min: 1.0, lifetime_max: 2.2,
+        speed_min: 10.0, speed_max: 40.0, gravity: vec2(0.0, -70.0),
+        size_start: 5.0, size_start_max: 9.0, size_end: 11.0,
+        color_start: col(0.65, 1.0, 0.35, 0.9), color_end: col(0.3, 0.8, 0.1, 0.0),
+        shape: EmitShape::Circle, shape_radius: GAS_RADIUS * 0.8,
+        blend: Blend::Additive, max_particles: 126, z: 151.0, ..
+    }, GAS_LIFE + 0.5);
+    cmd.spawn([
+        at(where_at.x, where_at.y),
+        GasCloud { radius: GAS_RADIUS, damage: damage, life: GAS_LIFE, bubbles: bubbles, .. },
+        PointLight { color: GAS_GLOW, intensity: 1.6, radius: GAS_RADIUS * 2.2, falloff: 1.2, shadows: false, .. },
+        ParticleEmitter {
+            rate: 120.0, lifetime_min: 1.6, lifetime_max: 3.2, prewarm: 0.6,
+            speed_min: 5.0, speed_max: 35.0, drag: 0.8,
+            size_start: 34.0, size_start_max: 52.0, size_end: 84.0,
+            color_start: col(0.45, 0.9, 0.25, 0.6), color_end: col(0.18, 0.4, 0.08, 0.0),
+            shape: EmitShape::Circle, shape_radius: GAS_RADIUS * 0.75,
+            spin_min: -1.2, spin_max: 1.2,
+            blend: Blend::Alpha, max_particles: 576, z: 150.0, ..
+        },
+    ]);
+}
+
+@system(in_state: [GameState::Playing])
+fn gas_clouds(clouds: (Entity, GasCloud, Transform, ParticleEmitter, PointLight)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
+    for (ce, c, t, smoke, glow) in clouds {
+        if !c.landed {
+            c.fall += 1400.0 * time.dt;
+            let drop = c.fall * time.dt;
+            let ground = physics.raycast_mask(t.position, vec2(0.0, 1.0), drop + 40.0, WALL_BITS);
+            if ground.hit {
+                t.position = vec2(t.position.x, ground.point.y - 40.0);
+                c.landed = true;
+                flash(cmd, t.position, GAS_GLOW, 2.0, 380.0, 0.2);
+            } else {
+                t.position = t.position + vec2(0.0, drop);
+            }
+            cmd.insert(c.bubbles, Transform { position: t.position, .. });
+        } else if c.life > 0.0 {
+            c.life -= time.dt;
+            c.tick -= time.dt;
+            if c.tick <= 0.0 {
+                c.tick = GAS_TICK;
+                let hurt = false;
+                for (_, e, et) in enemies {
+                    if e.health > 0 && t.position.distance(et.position) <= c.radius + enemy_reach(et) * 0.5 {
+                        damage_enemy(e, c.damage);
+                        burst(cmd, et.position, 16, 160.0, 9.0, col(0.7, 1.0, 0.4, 1.0), col(0.2, 0.5, 0.05, 0.0), 0.4);
+                        hurt = true;
+                    }
                 }
+                glow.intensity = if hurt { 2.6 } else { 1.8 };
+            } else {
+                glow.intensity = max(glow.intensity - 2.0 * time.dt, 1.4);
+            }
+        } else {
+            // Spent: no more damage, the smoke stops and drifts away.
+            smoke.rate = 0.0;
+            c.fade += time.dt;
+            glow.intensity = max(1.4 * (1.0 - c.fade / 1.2), 0.0);
+            if c.fade >= GAS_FADE {
+                cmd.despawn(ce);
             }
         }
-        if th.kind == "chain" {
-            t.rotation = shot.vel.angle();
-        }
-        if hit {
-            if th.kind == "chain" {
-                zap(cmd, t.position);
-                chain_bolt(cmd, physics, t.position, enemies, 2 + th.level, 1);
-            }
-            if th.kind == "gas" {
-                flash(cmd, t.position, col(0.45, 1.0, 0.3, 1.0), 5.0, 600.0, 0.2);
-                burst(cmd, t.position, 140, 620.0, 14.0, col(0.75, 1.0, 0.45, 1.0), col(0.2, 0.5, 0.05, 0.0), 0.7);
-                burst(cmd, t.position, 50, 260.0, 30.0, col(0.5, 0.9, 0.3, 0.6), col(0.2, 0.45, 0.1, 0.0), 1.0);
-                spawn_gas(cmd, t.position, th.level);
-            }
-            cmd.despawn(te);
+    }
+}
+
+// The cloud's reach, drawn faintly so the player can see where it hurts.
+@system(in_state: [GameState::Playing])
+fn draw_gas(clouds: (GasCloud, Transform)[], draw: Draw) {
+    draw.overlay();
+    for (c, t) in clouds {
+        if c.landed && c.life > 0.0 {
+            let a = 0.18 + 0.12 * min(c.life, 1.0);
+            draw.circle_lines(t.position, c.radius, col(0.5, 1.0, 0.35, a), 3.0);
         }
     }
 }
