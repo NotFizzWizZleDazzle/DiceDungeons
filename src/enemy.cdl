@@ -179,8 +179,8 @@ fn bolts(shots: (Entity, Bolt, Transform)[], player: (Player, Transform, Velocit
 }
 
 @system(on_exit: GameState::MainMenu)
-fn new_dungeon(s: DungeonSettings, st: DungeonState, waves: EnemyWaves, random: Random, assets: Assets, window: Window, chunks: (Entity, Chunk)[], bounds: (Entity, DungeonBounds)[], cmd: Commands) {
-    s.seed = random.stream("dungeon").range(1, 1000000000);
+fn new_dungeon(s: DungeonSettings, st: DungeonState, waves: EnemyWaves, luck: Luck, assets: Assets, window: Window, chunks: (Entity, Chunk)[], bounds: (Entity, DungeonBounds)[], cmd: Commands) {
+    s.seed = luck.r.range(1, 1000000000);
     for (e, _) in chunks {
         cmd.despawn(e);
     }

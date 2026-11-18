@@ -10,6 +10,16 @@ const WALL_BITS: int = 1;
 const PLAYER_BITS: int = 2;
 const ENEMY_BITS: int = 4;
 
+@resource
+struct Luck {
+    r: Rng = rng(1),
+}
+
+@system(schedule: Schedule::Startup)
+fn seed_luck(luck: Luck, random: Random) {
+    luck.r = random.stream("luck");
+}
+
 fn min_int(a: int, b: int) -> int {
     if a < b {
         return a;

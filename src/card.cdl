@@ -91,11 +91,10 @@ fn card_due(sets: CardSettings, kill: int) -> bool {
 }
 
 @system(in_state: [GameState::Playing])
-fn card_drops(kills: Kills, sets: CardSettings, progress: UpgradeProgress, art: CardAsset, cmd: Commands) {
+fn card_drops(kills: Kills, sets: CardSettings, progress: UpgradeProgress, luck: Luck, art: CardAsset, cmd: Commands) {
     for pos in kills.deaths {
         progress.rolls += 1;
-        let r = rng(progress.rolls * 7919);
-        if card_due(sets, progress.rolls) || r.chance(sets.drop_chance) {
+        if card_due(sets, progress.rolls) || luck.r.chance(sets.drop_chance) {
             cmd.spawn([
                 Transform { position: pos, scale: vec2(1.2, 1.2), .. },
                 Sprite { image: art.middle, z: 120.0, .. },
@@ -143,8 +142,8 @@ fn clear_card_drops(drops: (Entity, CardDrop)[], cmd: Commands) {
 }
 
 @system(on_enter: GameState::PickingUpgrade)
-fn deal_cards(art: CardAsset, sets: CardSettings, owned: Abilities, window: Window, random: Random, cmd: Commands) {
-    let r = rng(random.stream("cards").range(1, 1000000000));
+fn deal_cards(art: CardAsset, sets: CardSettings, owned: Abilities, window: Window, luck: Luck, cmd: Commands) {
+    let r = rng(luck.r.range(1, 1000000000));
     let common: int[] = [];
     let rare: int[] = [];
     for i in range(art.abilities.len()) {

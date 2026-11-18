@@ -13,6 +13,8 @@ const GAS_COOLDOWN: float = 3.5;
 const CAST_OFFSET: float = 130.0;
 const FIREBALL_SPEED: float = 720.0;
 const FIREBALL_LOFT: float = 380.0;
+const FIREBALL_RADIUS: float = 15.0;
+const FIREBALL_HITS: int = 65535 - PLAYER_BITS;
 const SHIELD_COOLDOWN: float = 8.0;
 const SHIELD_TIME: float = 6.0;
 const SHIELD_RADIUS: float = 150.0;
@@ -323,7 +325,7 @@ fn spawn_fireball(cmd: Commands, from: Vec2, dir: Vec2, damage: int, radius: flo
         at(from.x, from.y),
         Projectile { vel: dir * FIREBALL_SPEED - vec2(0.0, FIREBALL_LOFT), gravity: 900.0, life: 3.0 },
         Fireball { damage: damage, radius: radius, smoke: smoke, sparks: sparks },
-        Circle { radius: 15.0, color: col(1.0, 0.9, 0.55, 1.0), z: 155.0, .. },
+        Circle { radius: FIREBALL_RADIUS, color: col(1.0, 0.9, 0.55, 1.0), z: 155.0, .. },
         PointLight { color: col(1.0, 0.55, 0.15, 1.0), intensity: 2.5, radius: 260.0, falloff: 1.5, shadows: false, .. },
         ParticleEmitter {
             rate: 220.0, lifetime_min: 0.36, lifetime_max: 0.99,
@@ -443,12 +445,22 @@ fn explode(cmd: Commands, at_pos: Vec2, b: Fireball, enemies: (Entity, Enemy, Tr
 fn fly_fireballs(balls: (Entity, Projectile, Fireball, Transform)[], enemies: (Entity, Enemy, Transform)[], physics: Physics, time: Time, cmd: Commands) {
     for (be, shot, b, t) in balls {
         let step = fall_step(shot, time.dt);
-        let hit_wall = hits_wall(physics, t.position, step);
+        let boom = shot.life <= 0.0;
+        let len = step.length();
+        if len > 0.0 {
+            let ray = physics.raycast_mask(t.position, step * (1.0 / len), len + FIREBALL_RADIUS, FIREBALL_HITS);
+            if ray.hit {
+                boom = true;
+                step = step * (ray.fraction * (len + FIREBALL_RADIUS) / len);
+            }
+        }
         shot.life -= time.dt;
         t.position = t.position + step;
         cmd.insert(b.smoke, Transform { position: t.position, .. });
         cmd.insert(b.sparks, Transform { position: t.position, .. });
-        let boom = hit_wall || shot.life <= 0.0;
+        if physics.overlap_circle_mask(t.position, FIREBALL_RADIUS, FIREBALL_HITS).len() > 0 {
+            boom = true;
+        }
         for (_, _, et) in enemies {
             if t.position.distance(et.position) <= enemy_reach(et) {
                 boom = true;
