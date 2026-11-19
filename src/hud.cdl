@@ -6,7 +6,7 @@ const HUD_X: float = 40.0;
 const HUD_Y: float = 44.0;
 const DOT_SCALE: float = 3.0;
 const DOT_GAP: float = 56.0;
-const CELLS: int = 10;
+const MANA_PER_CELL: int = 5;
 const CELL: float = 30.0;
 const CELL_GAP: float = 2.0;
 
@@ -25,27 +25,21 @@ struct HealthDot {
 }
 
 @component
+struct ManaBack {}
+
+@component
 struct ManaCell {
     index: int = 0,
 }
 
 @system(on_exit: GameState::MainMenu)
 fn spawn_hud(cmd: Commands) {
-    let bar_y = HUD_Y + 64.0;
-    let w = float(CELLS) * (CELL + CELL_GAP) - CELL_GAP;
     cmd.spawn([
-        at(HUD_X - 4.0, bar_y),
-        Rectangle { size: vec2(w + 8.0, CELL + 8.0), color: Color { r: 0.05, g: 0.05, b: 0.08, a: 0.85 }, pivot: vec2(0.0, 0.5), z: 0.0, layer: hud_layer(), .. },
+        at(HUD_X - 4.0, HUD_Y + 64.0),
+        Rectangle { size: vec2(0.0, CELL + 8.0), color: Color { r: 0.05, g: 0.05, b: 0.08, a: 0.85 }, pivot: vec2(0.0, 0.5), z: 0.0, layer: hud_layer(), .. },
+        ManaBack {},
         HudPart {},
     ]);
-    for i in range(CELLS) {
-        cmd.spawn([
-            at(HUD_X + float(i) * (CELL + CELL_GAP), bar_y),
-            Rectangle { size: vec2(CELL, CELL), color: Color { r: 0.25, g: 0.5, b: 1.0, a: 1.0 }, pivot: vec2(0.0, 0.5), z: 1.0, layer: hud_layer(), .. },
-            ManaCell { index: i },
-            HudPart {},
-        ]);
-    }
 }
 
 @system(on_enter: GameState::MainMenu)
@@ -56,7 +50,7 @@ fn clear_hud(parts: (Entity, HudPart)[], cmd: Commands) {
 }
 
 @system(in_state: [GameState::Playing, GameState::PickingUpgrade])
-fn update_hud(players: (Entity, Player)[], dots: (Entity, HealthDot, Sprite)[], cells: (ManaCell, Rectangle)[], art: HudArt, cmd: Commands) {
+fn update_hud(players: (Entity, Player)[], dots: (Entity, HealthDot, Sprite)[], cells: (Entity, ManaCell, Rectangle)[], backs: (ManaBack, Rectangle)[], art: HudArt, cmd: Commands) {
     let health = 0;
     let max_health = 0;
     let mana = 0;
@@ -93,12 +87,32 @@ fn update_hud(players: (Entity, Player)[], dots: (Entity, HealthDot, Sprite)[], 
         }
     }
 
-    let lit = int(float(CELLS) * float(mana) / float(max_mana) + 0.5);
-    for (c, cell) in cells {
+    let cells_n = max_int(max_mana / MANA_PER_CELL, 1);
+    let lit = int(float(cells_n) * float(mana) / float(max_mana) + 0.5);
+    let shown: int[] = [];
+    for (e, c, cell) in cells {
+        if c.index >= cells_n {
+            cmd.despawn(e);
+            continue;
+        }
+        shown.push(c.index);
         if c.index < lit {
             cell.color = Color { r: 0.25, g: 0.5, b: 1.0, a: 1.0 };
         } else {
             cell.color = Color { r: 0.12, g: 0.14, b: 0.22, a: 1.0 };
         }
+    }
+    for i in range(cells_n) {
+        if !shown.contains(i) {
+            cmd.spawn([
+                at(HUD_X + float(i) * (CELL + CELL_GAP), HUD_Y + 64.0),
+                Rectangle { size: vec2(CELL, CELL), color: Color { r: 0.25, g: 0.5, b: 1.0, a: 1.0 }, pivot: vec2(0.0, 0.5), z: 1.0, layer: hud_layer(), .. },
+                ManaCell { index: i },
+                HudPart {},
+            ]);
+        }
+    }
+    for (_, back) in backs {
+        back.size = vec2(float(cells_n) * (CELL + CELL_GAP) - CELL_GAP + 8.0, CELL + 8.0);
     }
 }

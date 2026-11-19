@@ -1,0 +1,79 @@
+import "drift" { * };
+import "game_state.cdl" { * };
+import "player.cdl" { * };
+import "enemy.cdl" { * };
+import "card.cdl" { * };
+
+@settings(section: "heal")
+struct HealSettings {
+    drop_chance: float = 0.25,
+    radius: float = 110.0,
+    life: float = 15.0,
+    scale: float = 4.0,
+}
+
+@resource
+struct HealAsset {
+    heart: Texture = texture("assets/healthPickup.png"),
+}
+
+@component
+struct HealDrop {
+    base_y: float = 0.0,
+    age: float = 0.0,
+}
+
+@system(in_state: [GameState::Playing], before: [card_drops])
+fn heal_drops(kills: Kills, sets: HealSettings, luck: Luck, art: HealAsset, cmd: Commands) {
+    for pos in kills.deaths {
+        if luck.r.chance(sets.drop_chance) {
+            let at_pos = vec2(pos.x + 60.0, pos.y);
+            cmd.spawn([
+                Transform { position: at_pos, scale: vec2(sets.scale, sets.scale), .. },
+                Sprite { image: art.heart, z: 119.0, .. },
+                HealDrop { base_y: at_pos.y, .. },
+                PointLight { color: Color { r: 1.0, g: 0.3, b: 0.3, a: 1.0 }, intensity: 1.2, radius: 140.0, falloff: 1.5, shadows: false, .. },
+                ParticleEmitter {
+                    rate: 14.0, lifetime_min: 0.5, lifetime_max: 1.0,
+                    speed_min: 10.0, speed_max: 35.0, angle_min: -2.4, angle_max: -0.7,
+                    size_start: 4.0, size_end: 0.5,
+                    color_start: Color { r: 1.0, g: 0.45, b: 0.45, a: 1.0 },
+                    color_end: Color { r: 0.9, g: 0.1, b: 0.15, a: 0.0 },
+                    shape: EmitShape::Circle, shape_radius: 18.0,
+                    blend: Blend::Additive, max_particles: 30, z: 120.0, ..
+                },
+            ]);
+        }
+    }
+}
+
+@system(in_state: [GameState::Playing])
+fn heal_pickups(drops: (Entity, HealDrop, Transform, Sprite)[], player: (Player, Transform)[], sets: HealSettings, time: Time, cmd: Commands) {
+    for (e, d, t, sprite) in drops {
+        d.age += time.dt;
+        t.position = vec2(t.position.x, d.base_y - 20.0 - 8.0 * sin(d.age * 4.0));
+        let left = sets.life - d.age;
+        if left < 3.0 && int(left * 6.0) % 2 == 0 {
+            sprite.color = Color { r: 1.0, g: 1.0, b: 1.0, a: 0.3 };
+        } else {
+            sprite.color = Color { .. };
+        }
+        let taken = false;
+        for (p, pt) in player {
+            if !taken && p.health < p.max_health && t.position.distance(pt.position) <= sets.radius {
+                p.health += 1;
+                taken = true;
+            }
+        }
+        if taken || d.age >= sets.life {
+            cmd.despawn(e);
+        }
+    }
+}
+
+@system(on_exit: GameState::MainMenu)
+fn clear_heal_drops(drops: (Entity, HealDrop)[], cmd: Commands) {
+    for (e, _) in drops {
+        cmd.despawn(e);
+    }
+}

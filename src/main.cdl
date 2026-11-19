@@ -10,6 +10,7 @@ import "enemy_ai.cdl" { * };
 import "card.cdl" { * };
 import "ability.cdl" { * };
 import "hud.cdl" { * };
+import "pickup.cdl" { * };
 
 @system(schedule: Schedule::Startup)
 fn build_dungeon(assets: Assets, settings: DungeonSettings, window: Window, dungeon: DungeonState, cmd: Commands, torch_art: TorchAsset, torches: TorchSettings) {

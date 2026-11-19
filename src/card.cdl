@@ -14,7 +14,7 @@ struct CardSettings {
     pickup_life: float = 20.0,
     rare_chance: float = 0.02,
     rare_after: int = 3,
-    rare: string[] = ["health", "speed"],
+    rare: string[] = ["health"],
 }
 
 @resource
@@ -67,7 +67,7 @@ fn spawn_card(cmd: Commands, art: CardAsset, ability: int, pos: Vec2, scale: flo
     cmd.spawn([
         Transform { position: pos, scale: vec2(scale, scale), .. },
         Sprite { image: art.bg.to_image().crop(Rect { x: 24, y: 2, w: 55, h: 92 }).to_texture(), z: 0.5, layer: hud_layer(), .. },
-        Card { ability: ability },
+        CardPart {},
     ]);
     cmd.spawn([
         Transform { position: pos, scale: vec2(scale, scale), .. },

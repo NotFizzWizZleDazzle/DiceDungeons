@@ -4,12 +4,7 @@ import "player.cdl" { * };
 import "enemy.cdl" { * };
 import "card.cdl" { * };
 
-const BOLT_COOLDOWN: float = 0.35;
-const BOLT_COST: int = 15;
-const FIRE_COOLDOWN: float = 1.2;
-const ICE_COOLDOWN: float = 0.6;
-const CHAIN_COOLDOWN: float = 1.8;
-const GAS_COOLDOWN: float = 3.5;
+const BOLT_COST: int = 8;
 const CAST_OFFSET: float = 130.0;
 const FIREBALL_SPEED: float = 720.0;
 const FIREBALL_LOFT: float = 380.0;
@@ -20,15 +15,14 @@ const SHIELD_TIME: float = 6.0;
 const SHIELD_RADIUS: float = 150.0;
 const MANA_REGEN: float = 10.0;
 const MANA_PER_KILL: int = 6;
-const FIRE_COST: int = 25;
-const ICE_COST: int = 12;
-const CHAIN_COST: int = 30;
+const FIRE_COST: int = 22;
+const ICE_COST: int = 10;
+const CHAIN_COST: int = 28;
 const GAS_COST: int = 35;
 
 @resource
 struct AbilityState {
     applied: int = 0,
-    bolt_cd: float = 0.0,
     mana_acc: float = 0.0,
     kills_seen: int = 0,
     selected: string = "firebolt",
@@ -37,10 +31,6 @@ struct AbilityState {
     shield_cd: float = 0.0,
     shield_left: float = 0.0,
     shield_fx: Entity = Entity { .. },
-    fire_cd: float = 0.0,
-    ice_cd: float = 0.0,
-    chain_cd: float = 0.0,
-    gas_cd: float = 0.0,
 }
 
 @component
@@ -161,11 +151,6 @@ fn reset_abilities(st: AbilityState, cmd: Commands) {
         cmd.despawn(st.shield_fx);
         st.shield_on = false;
     }
-    st.bolt_cd = 0.0;
-    st.fire_cd = 0.0;
-    st.ice_cd = 0.0;
-    st.chain_cd = 0.0;
-    st.gas_cd = 0.0;
 }
 
 @system(in_state: [GameState::Playing])
@@ -202,11 +187,6 @@ fn apply_picks(player: (Player, Transform)[], owned: Abilities, st: AbilityState
 
 @system(in_state: [GameState::Playing])
 fn cast_abilities(player: (Player, Transform)[], enemies: (Entity, Enemy, Transform)[], owned: Abilities, st: AbilityState, kills: Kills, input: Input, time: Time, physics: Physics, cmd: Commands) {
-    st.bolt_cd -= time.dt;
-    st.fire_cd -= time.dt;
-    st.ice_cd -= time.dt;
-    st.chain_cd -= time.dt;
-    st.gas_cd -= time.dt;
     let gained = max_int(kills.count - st.kills_seen, 0);
     st.kills_seen = kills.count;
     for (p, _) in player {
@@ -264,28 +244,23 @@ fn cast_abilities(player: (Player, Transform)[], enemies: (Entity, Enemy, Transf
             from = path.point - aim * 2.0;
         }
 
-        if st.selected == "firebolt" && st.bolt_cd <= 0.0 && pay(p, BOLT_COST) {
-            st.bolt_cd = BOLT_COOLDOWN;
+        if st.selected == "firebolt" && pay(p, BOLT_COST) {
             spawn_fire_bolt(cmd, from, aim);
         }
         let fire = count_of(owned, "fireball");
-        if st.selected == "fireball" && fire > 0 && st.fire_cd <= 0.0 && pay(p, FIRE_COST) {
-            st.fire_cd = FIRE_COOLDOWN;
+        if st.selected == "fireball" && fire > 0 && pay(p, FIRE_COST) {
             spawn_fireball(cmd, from, aim, 1 + fire, 140.0 + 30.0 * float(fire));
         }
         let ice = count_of(owned, "iceknife");
-        if st.selected == "iceknife" && ice > 0 && st.ice_cd <= 0.0 && pay(p, ICE_COST) {
-            st.ice_cd = ICE_COOLDOWN;
+        if st.selected == "iceknife" && ice > 0 && pay(p, ICE_COST) {
             spawn_ice_knife(cmd, from, aim, ice);
         }
         let chain = count_of(owned, "chainbolt");
-        if st.selected == "chainbolt" && chain > 0 && st.chain_cd <= 0.0 && pay(p, CHAIN_COST) {
-            st.chain_cd = CHAIN_COOLDOWN;
+        if st.selected == "chainbolt" && chain > 0 && pay(p, CHAIN_COST) {
             spawn_chain_bolt(cmd, from, aim, chain);
         }
         let gas = count_of(owned, "gascloud");
-        if st.selected == "gascloud" && gas > 0 && st.gas_cd <= 0.0 && pay(p, GAS_COST) {
-            st.gas_cd = GAS_COOLDOWN;
+        if st.selected == "gascloud" && gas > 0 && pay(p, GAS_COST) {
             spawn_gas_flask(cmd, from, mouse, gas);
         }
     }

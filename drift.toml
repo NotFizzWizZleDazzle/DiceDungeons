@@ -34,4 +34,4 @@ enabled = true
 shown = false
 
 [enemy_ai]
-difficulty = 1.0
+difficulty = 1.6

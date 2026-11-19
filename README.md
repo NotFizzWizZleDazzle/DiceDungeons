@@ -14,10 +14,10 @@ drift run .
 - Right click: shield
 - 1-5, Q, E: switch spell
 
-Defeated dice drop upgrade cards.
+Defeated dice drop upgrade cards, and sometimes a heart that heals you.
 
 ## Enemies
 
-A die's face is its health. d6s charge you up close; d4s shoot from range. Both warn you before they attack.
+A die's face is its health. d6s charge you up close; d4s shoot from range. Both warn you before they attack, hunt you down once they notice you, dodge your spells, and never back off.
 
-Set `difficulty` under `[enemy_ai]` in `drift.toml` to make them easier or harder.
+Set `difficulty` under `[enemy_ai]` in `drift.toml` to make them easier or harder, and `retreat = true` to let wounded dice fall back.

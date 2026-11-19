@@ -10,24 +10,30 @@ enum Mode { Patrol, Notice, Chase, Windup, Strike, Recover, Retreat, Search }
 
 @settings(section: "enemy_ai")
 struct EnemyAiSettings {
-    difficulty: float = 1.0,
-    sight: float = 1100.0,
-    hearing: float = 300.0,
-    reaction: float = 0.45,
-    alert_radius: float = 900.0,
-    forget_after: float = 0.8,
-    search_time: float = 4.0,
+    difficulty: float = 1.6,
+    sight: float = 1500.0,
+    hearing: float = 700.0,
+    reaction: float = 0.15,
+    alert_radius: float = 1500.0,
+    forget_after: float = 3.0,
+    search_time: float = 10.0,
     patrol_span: float = 260.0,
-    melee_windup: float = 0.55,
-    melee_attackers: int = 2,
-    ranged_aim: float = 0.75,
+    melee_windup: float = 0.4,
+    melee_attackers: int = 6,
+    ranged_aim: float = 0.55,
     ranged_lock: float = 0.25,
-    ranged_gap: float = 0.5,
-    ranged_min: float = 420.0,
-    ranged_max: float = 950.0,
+    ranged_gap: float = 0.25,
+    ranged_min: float = 260.0,
+    ranged_max: float = 650.0,
     aim_lead: float = 0.7,
-    min_hit_chance: float = 0.35,
-    dodge: float = 0.4,
+    min_hit_chance: float = 0.2,
+    dodge: float = 0.85,
+    dodge_cooldown: float = 0.45,
+    retreat: bool = false,
+    hunt_range: float = 1800.0,
+    rush: float = 1.4,
+    cooldown: float = 0.4,
+    recover: float = 0.2,
     think_rate: float = 8.0,
     log_states: bool = false,
     show_states: bool = false,
@@ -54,6 +60,8 @@ struct Brain {
     grounded: bool = false,
     blocked: bool = false,
     dodge_cd: float = 0.0,
+    dodge_time: float = 0.0,
+    dodge_vx: float = 0.0,
     jump_cd: float = 0.0,
     last_hurt: float = 0.0,
 }
@@ -332,7 +340,7 @@ fn enemy_think(
         let now = b.mode.now;
 
         if now == Mode::Patrol {
-            if b.sees {
+            if b.sees || dist <= s.hunt_range {
                 d.raised.push(pos);
                 change(b, e, id, Mode::Notice, "saw the player", s);
             }
@@ -341,7 +349,7 @@ fn enemy_think(
             if b.mode.time >= b.reaction {
                 if b.unseen > s.forget_after {
                     change(b, e, id, Mode::Search, "lost sight", s);
-                } else if stance(e, d, allies, cornered) == Stance::Retreat {
+                } else if s.retreat && stance(e, d, allies, cornered) == Stance::Retreat {
                     change(b, e, id, Mode::Retreat, "too risky", s);
                 } else {
                     change(b, e, id, Mode::Chase, "reacted", s);
@@ -350,7 +358,7 @@ fn enemy_think(
         } else if now == Mode::Chase {
             if b.unseen > s.forget_after {
                 change(b, e, id, Mode::Search, "lost sight", s);
-            } else if b.mode.time > 0.6 && stance(e, d, allies, cornered) == Stance::Retreat {
+            } else if s.retreat && b.mode.time > 0.6 && stance(e, d, allies, cornered) == Stance::Retreat {
                 change(b, e, id, Mode::Retreat, "player could finish it", s);
             } else if melee {
                 let my_side = sign(pos.x - player.x);
@@ -388,12 +396,12 @@ fn enemy_think(
         } else if now == Mode::Strike {
             let done = if melee { b.mode.time > 0.25 && b.grounded || b.mode.time > 1.0 } else { true };
             if done {
-                b.cooldown = e.attack_cooldown / pace;
+                b.cooldown = e.attack_cooldown * s.cooldown / pace;
                 let how = if !melee { "shot" } else if b.landed { "hit" } else { "missed" };
                 change(b, e, id, Mode::Recover, how, s);
             }
         } else if now == Mode::Recover {
-            if b.mode.time >= 0.5 / pace {
+            if b.mode.time >= s.recover / pace {
                 change(b, e, id, Mode::Chase, "recovered", s);
             }
         } else if now == Mode::Retreat {
@@ -469,6 +477,7 @@ fn enemy_steer(
                 v.linear = vec2(0.0, -520.0);
             }
         } else if now == Mode::Chase {
+            run = speed * s.rush;
             if e.sides == 6 {
                 let ring = e.melee_range * 0.6;
                 if d.attackers >= max_attackers(s) {
@@ -510,8 +519,8 @@ fn enemy_steer(
             }
         } else if now == Mode::Recover {
             if e.sides == 6 && b.grounded {
-                goal = pos.x + sign(pos.x - player.x) * 80.0;
-                run = speed * 0.5;
+                goal = player.x;
+                run = speed * s.rush;
             }
         } else if now == Mode::Retreat && (player.x - pos.x).abs() < SAFE_DISTANCE {
             let away = sign(pos.x - player.x);
@@ -526,7 +535,7 @@ fn enemy_steer(
         } else if now == Mode::Search {
             if (b.last_seen.x - pos.x).abs() > ARRIVE * 2.0 && !b.blocked {
                 goal = b.last_seen.x;
-                run = speed * 0.7;
+                run = speed * s.rush;
             } else if int(b.mode.time / 0.7) % 2 == 0 {
                 b.facing = 1.0;
             } else {
@@ -544,7 +553,12 @@ fn enemy_steer(
             }
         }
 
-        let moving = now != Mode::Windup && now != Mode::Strike && now != Mode::Notice;
+        let dodging = b.dodge_time > 0.0;
+        if dodging {
+            b.dodge_time -= dt;
+            v.linear = vec2(b.dodge_vx, v.linear.y);
+        }
+        let moving = !dodging && now != Mode::Windup && now != Mode::Strike && now != Mode::Notice;
         if moving {
             let dx = goal - pos.x;
             let vx = 0.0;
@@ -587,21 +601,32 @@ fn enemy_steer(
             }
         }
 
-        if e.sides == 6 && b.grounded && b.dodge_cd <= 0.0 && now != Mode::Strike && now != Mode::Patrol {
+        // A shot about to hit is hopped over when it comes in flat and side-stepped
+        // when it drops from above.
+        if b.grounded && b.dodge_cd <= 0.0 && now != Mode::Strike {
             for (shot, st) in shots {
                 let rel = pos - st.position;
                 let speed2 = shot.vel.dot(shot.vel);
-                if speed2 > 1.0 {
+                if speed2 > 1.0 && b.dodge_cd <= 0.0 {
                     let eta = rel.dot(shot.vel) / speed2;
                     let miss = (rel - shot.vel * eta).length();
-                    if eta > 0.05 && eta < 0.4 && miss < 110.0 && b.dodge_cd <= 0.0 {
-                        b.dodge_cd = 0.9;
-                        let dodges = d.rng.chance(clamp(s.dodge * s.difficulty, 0.0, 0.95));
-                        if dodges {
-                            v.linear = vec2(sign(rel.x) * speed, -jump_speed(240.0));
+                    if eta > 0.03 && eta < 0.55 && miss < half + 60.0 {
+                        b.dodge_cd = s.dodge_cooldown;
+                        let dodges = d.rng.chance(clamp(s.dodge, 0.0, 1.0));
+                        let impact = st.position + shot.vel * eta;
+                        let away = if pos.x == impact.x { -b.facing } else { sign(pos.x - impact.x) };
+                        let falling = shot.vel.y > shot.vel.x.abs() * 0.6;
+                        if dodges && falling {
+                            b.dodge_vx = away * max(speed * 2.6, 700.0);
+                            b.dodge_time = 0.28;
+                            v.linear = vec2(b.dodge_vx, -260.0);
+                        } else if dodges {
+                            b.dodge_vx = away * speed * 0.6;
+                            b.dodge_time = 0.2;
+                            v.linear = vec2(b.dodge_vx, -jump_speed(half * 2.0 + 120.0));
                         }
                         if s.log_states {
-                            log("[ai] " + kind_name(e) + "#" + string(id.id) + " sees a spell coming: " + if dodges { "hops over it" } else { "too slow" });
+                            log("[ai] " + kind_name(e) + "#" + string(id.id) + " sees a spell coming: " + if !dodges { "too slow" } else if falling { "side-steps" } else { "hops over it" });
                         }
                     }
                 }
